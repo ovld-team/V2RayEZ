@@ -1,0 +1,70 @@
+# --- IDE / OS ---
+*.iml
+.idea/
+.run/
+.vscode/
+.DS_Store
+*.swp
+*~
+Thumbs.db
+
+# --- Local machine / secrets (never commit) ---
+local.properties
+keystore.properties
+*.jks
+*.keystore
+!debug.keystore
+*.pem
+*.p12
+app/google-services.json
+
+# --- Gradle / Android build caches & outputs ---
+.gradle/
+build/
+**/build/
+.cxx/
+.externalNativeBuild/
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# Keep a dedicated releases/ folder in git as empty placeholder only
+!releases/
+releases/*
+!releases/.gitkeep
+
+# --- Native / NDK ---
+obj/
+libs/**/*.so
+!app/libs/*.aar
+
+# --- Kotlin / KSP / Hilt ---
+*.kotlin_module
+
+# --- Test / coverage ---
+.coverage/
+coverage/
+*.exec
+*.ec
+
+# --- Logs / temp ---
+*.log
+*.tmp
+*.temp
+*.bak
+logcat
+logcat.*
+
+# --- Local staging (build outputs / private packs) ---
+artifacts/
+_ref/
+release-assets/
+
+# --- Misc ---
+.kotlin/
+node_modules/
+**/__pycache__/
+*.pyc

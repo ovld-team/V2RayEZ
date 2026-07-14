@@ -1,0 +1,44 @@
+# Format: TODO_ID|focused_test_patterns(comma)|neighbor_patterns(comma)|stack_flag
+# stack_flag: xeovo | -
+# Patterns are Gradle --tests globs. Use - to skip.
+s0-skills|-|-|-
+g0-task-gates|-|-|-
+f1-foundation|*AppSettings*|*SettingsDataStore*|-
+s1-split|*PerApp*|*XeovoFeatureMatrixTest|-
+t1-tor-lifecycle|*TorLifecycle*|*PerApp*|-
+t1-tor-bridges|*TorBridge*|*TorLifecycle*|-
+h2-always-on|-|-|-
+h3-power-boot-notif|-|-|-
+h1-hotspot|*ConfigBuilder*|*PerApp*|-
+w5-packs|-|-|-
+w1-transport|*DownloadTransport*|-|-
+w2-store|*NativeBinary*|*AddonPack*|*DownloadTransport*|-
+w3-resolvers|*PackAvailability*|*NativeBinary*|-
+w4-components|-|-|-
+w6-strip|-|*Xeovo*|xeovo
+u1-motion-kit|-|-|-
+o12-welcome-terms|-|-|-
+o34-features-polish|-|-|-
+u2-motion-screens|-|-|-
+fb1-firebase-light|*FirebaseTelemetry*|*Privacy*|-
+b1-browser-analytics|*Analytics*|*FirebaseTelemetry*|-
+b2-browser-modern|-|-|-
+l1-logging|*LogRepository*|-|-
+d1-diagnostics|-|-|-
+dv1-studio|-|-|-
+q1-mid-audit|-|-|-
+a1-vpn|*Xeovo*|*ProxyParser*|xeovo
+a2-tools|*XeovoFeatureMatrix*|*Mitm*|xeovo
+a3-shell|-|-|-
+i1-fa|-|-|-
+pg-proguard|-|-|-
+r1-smoke|*Xeovo*|xeovo|xeovo
+dv2-gui|-|-|-
+dv3-tui-logs|-|-|-
+q2-xeovo|*Xeovo*|xeovo|xeovo
+q3-final-audit|-|-|-
+sec1-ship-security|-|-|-
+opt1-resources|*TorLifecycle*|*Xeovo*|xeovo
+g1-commit|-|-|-
+r2-apk|-|-|-
+ctx-handoff|-|-|-

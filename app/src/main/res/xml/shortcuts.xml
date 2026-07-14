@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="connect"
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_vpn"
+        android:shortcutShortLabel="@string/shortcut_connect_short"
+        android:shortcutLongLabel="@string/shortcut_connect_long">
+        <intent
+            android:action="com.v2rayez.app.action.SHORTCUT_CONNECT"
+            android:targetPackage="com.v2rayez.app"
+            android:targetClass="com.v2rayez.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="servers"
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_vpn"
+        android:shortcutShortLabel="@string/shortcut_servers_short"
+        android:shortcutLongLabel="@string/shortcut_servers_long">
+        <intent
+            android:action="com.v2rayez.app.action.SHORTCUT_SERVERS"
+            android:targetPackage="com.v2rayez.app"
+            android:targetClass="com.v2rayez.app.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="stats"
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_vpn"
+        android:shortcutShortLabel="@string/shortcut_stats_short"
+        android:shortcutLongLabel="@string/shortcut_stats_long">
+        <intent
+            android:action="com.v2rayez.app.action.SHORTCUT_STATS"
+            android:targetPackage="com.v2rayez.app"
+            android:targetClass="com.v2rayez.app.MainActivity" />
+    </shortcut>
+</shortcuts>

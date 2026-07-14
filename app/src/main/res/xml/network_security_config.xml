@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Trusts both the system CA store and user-installed CAs (incl. the local V2RayEz MITM CA
+  from data/cert/MitmCaGenerator.kt) for the app's own network traffic. This only affects
+  what THIS app trusts; it does not change trust for other apps or the OS.
+-->
+<network-security-config>
+    <base-config>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

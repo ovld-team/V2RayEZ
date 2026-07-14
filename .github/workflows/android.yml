@@ -1,0 +1,157 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["V2RayEZ-v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  ADDONS_REPO: ovld-team/V2RayEZ
+
+jobs:
+  build:
+    name: Build, unit tests & lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Write Firebase google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "GOOGLE_SERVICES_JSON secret is required" >&2
+            exit 1
+          fi
+          printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x ./gradlew
+
+      - name: Assemble debug
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: ./gradlew assembleDebug --stacktrace -Psentry.dsn="$SENTRY_DSN"
+
+      - name: Unit tests
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: ./gradlew testDebugUnitTest --stacktrace -Psentry.dsn="$SENTRY_DSN"
+
+      - name: Lint
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: ./gradlew lintDebug --stacktrace -Psentry.dsn="$SENTRY_DSN"
+
+  release:
+    name: Signed release + GitHub assets
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/V2RayEZ-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Write Firebase google-services.json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          printf '%s\n' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PROPERTIES: ${{ secrets.KEYSTORE_PROPERTIES }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PROPERTIES" ]; then
+            echo "KEYSTORE_BASE64 and KEYSTORE_PROPERTIES secrets are required for release" >&2
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 --decode > release.jks
+          printf '%s\n' "$KEYSTORE_PROPERTIES" > keystore.properties
+          # Force storeFile to the decoded keystore in the repo root
+          grep -v '^storeFile=' keystore.properties > keystore.properties.tmp || true
+          echo "storeFile=release.jks" >> keystore.properties.tmp
+          mv keystore.properties.tmp keystore.properties
+
+      - name: Derive version from tag
+        id: ver
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # V2RayEZ-v0.9.79-rc-1 → 0.9.79
+          VER=$(echo "$TAG" | sed -E 's/^V2RayEZ-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "apk=V2RayEZ-v${VER}-release.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble release
+        env:
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          ./gradlew assembleRelease --stacktrace \
+            -Psentry.dsn="$SENTRY_DSN" \
+            -Pv2rayez.addons.githubRepo="${{ env.ADDONS_REPO }}" \
+            -Pv2rayez.addons.releaseTag="${{ steps.ver.outputs.tag }}"
+
+      - name: Pack addon assets
+        run: |
+          chmod +x ./scripts/pack-addons.sh
+          ./scripts/pack-addons.sh "${{ steps.ver.outputs.version }}" release-assets/current
+
+      - name: Stage APK + checksums
+        run: |
+          set -euo pipefail
+          OUT=release-assets/current
+          APK_SRC=$(ls app/build/outputs/apk/release/app-universal-release.apk)
+          cp -f "$APK_SRC" "$OUT/${{ steps.ver.outputs.apk }}"
+          (
+            cd "$OUT"
+            : > SHA256SUMS.txt
+            shasum -a 256 "${{ steps.ver.outputs.apk }}" *.zip | sort -k2 >> SHA256SUMS.txt
+          )
+          ls -lh "$OUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT=release-assets/current
+          TAG="${{ steps.ver.outputs.tag }}"
+          VER="${{ steps.ver.outputs.version }}"
+          APK="${{ steps.ver.outputs.apk }}"
+          ASSETS=("$OUT/$APK" "$OUT/SHA256SUMS.txt" "$OUT"/*.zip)
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "${{ github.repository }}" --clobber "${ASSETS[@]}"
+          else
+            gh release create "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "V2RayEZ v${VER} RC" \
+              --prerelease \
+              --generate-notes \
+              "${ASSETS[@]}"
+          fi
