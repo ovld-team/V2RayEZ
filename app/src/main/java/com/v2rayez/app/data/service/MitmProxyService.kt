@@ -18,7 +18,10 @@ import com.v2rayez.app.data.cert.MitmCaStore
 import com.v2rayez.app.data.core.GeoAssetManager
 import com.v2rayez.app.data.core.V2RayCore
 import com.v2rayez.app.data.mitm.MitmConfigBuilder
+import com.v2rayez.app.data.repository.logMitm
+import com.v2rayez.app.domain.model.LogLevel
 import com.v2rayez.app.domain.model.ProxyCoreType
+import com.v2rayez.app.domain.repository.LogRepository
 import com.v2rayez.app.domain.repository.SettingsRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +46,7 @@ class MitmProxyService : Service() {
     @Inject lateinit var stateHolder: MitmProxyStateHolder
     @Inject lateinit var geoAssets: GeoAssetManager
     @Inject lateinit var remoteTelemetry: RemoteTelemetry
+    @Inject lateinit var logRepository: LogRepository
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var startJob: Job? = null
@@ -114,12 +118,31 @@ class MitmProxyService : Service() {
                 fail(getString(R.string.mitm_proxy_error_ports))
                 return
             }
+            // A listening port only proves that Xray parsed the config. Require a real request
+            // through the MITM core before advertising the browser proxy as active.
+            val exitOk = listOf(
+                "https://www.gstatic.com/generate_204",
+                "https://cp.cloudflare.com/generate_204",
+                "http://connectivitycheck.gstatic.com/generate_204"
+            ).any { url -> core.measureConnectedDelay(url) > 0 }
+            if (!exitOk) {
+                core.stopLoop()
+                fail(getString(R.string.vpn_error_no_internet) + " — MITM proxy probe failed")
+                return
+            }
             stateHolder.setRunning(true)
             stateHolder.setError(null)
             updateNotification(
                 getString(R.string.mitm_proxy_notif_title),
                 getString(R.string.mitm_proxy_notif_running, mitm.proxyPort, mitm.httpPort)
             )
+            runCatching {
+                logMitm(
+                    LogLevel.INFO,
+                    "MITM proxy listening",
+                    "socks=${mitm.proxyPort} http=${mitm.httpPort}"
+                )
+            }
             Log.i(TAG, "MITM proxy listening socks=${mitm.proxyPort} http=${mitm.httpPort}")
         } catch (t: Throwable) {
             Log.e(TAG, "startProxy failed", t)
@@ -130,6 +153,7 @@ class MitmProxyService : Service() {
     private suspend fun stopProxy() {
         startJob?.cancel()
         runCatching { core.stopLoop() }
+        runCatching { logMitm(LogLevel.INFO, "MITM proxy stopped") }
         stateHolder.setRunning(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -137,11 +161,17 @@ class MitmProxyService : Service() {
 
     private suspend fun fail(message: String) {
         runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.MITM, message) }
+        runCatching { logMitm(LogLevel.ERROR, message) }
         stateHolder.setError(message)
         stateHolder.setRunning(false)
         runCatching { core.stopLoop() }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun logMitm(level: LogLevel, message: String, detail: String? = null) {
+        logRepository.logMitm(level, message, detail)
+        remoteTelemetry.addLogBreadcrumb("mitm", level, message)
     }
 
     private fun portAccepts(port: Int, timeoutMs: Int = 1_500): Boolean {

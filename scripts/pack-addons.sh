@@ -6,10 +6,13 @@
 # on-demand into filesDir/addons/<packId>/<version>/.
 #
 # Usage:
-#   scripts/pack-addons.sh [version] [out_dir]
+#   scripts/pack-addons.sh [version] [out_dir] [vendor_dir]
 #
 #   version   Release tag written into the manifest/zip names (default: git describe, or "dev")
 #   out_dir   Where to write the zips (default: build/addon-packs — already gitignored)
+#   vendor_dir Optional checksum-verified binaries staged by CI (default: build/vendor-addons).
+#              Layout: <vendor_dir>/<abi>/<binary_name>. This is how Psiphon/dnstt
+#              upstream binaries are renamed and fed into the same pack pipeline.
 #
 # Output:
 #   <out_dir>/<addon>-<abi>.zip        one zip per addon per ABI, containing just the renamed
@@ -26,14 +29,16 @@ cd "$ROOT"
 
 VERSION="${1:-$(git describe --tags --always 2>/dev/null || echo dev)}"
 OUT_DIR_REL="${2:-build/addon-packs}"
+VENDOR_DIR="${3:-build/vendor-addons}"
 JNI_DIR="app/src/main/jniLibs"
 
 # addon_id:so_filename:binary_name — keep in sync with AddonPackId in data/core/AddonPackManager.kt
 #   addon_id    = AddonPackId enum name lowercased → the zip prefix the resolver expects
 #                 (`<addon_id>-<abi>.zip`, see AddonPackManager.wantAsset)
-#   so_filename = the file under jniLibs/<abi>/ to pack (only exists if a maintainer built it;
-#                 the P7 protocol natives are NOT bundled, so those rows no-op until dropped in)
+#   so_filename = the file under jniLibs/<abi>/ to pack (only exists if a maintainer built it)
 #   binary_name = the name the archive must expose (AddonPackId.binaryFileName)
+# The packer also accepts <vendor_dir>/<abi>/<binary_name>, populated by the release workflow from
+# scripts/addon-vendor-sources.json. Vendor inputs never enter jniLibs or the APK.
 ADDONS=(
   "tor:libtor.so:tor"
   "lyrebird:liblyrebird.so:lyrebird"
@@ -45,7 +50,7 @@ ADDONS=(
   "dnstunnel:libdnstt.so:dnstt"
 )
 
-if [[ ! -d "$JNI_DIR" ]]; then
+if [[ ! -d "$JNI_DIR" && ! -d "$VENDOR_DIR" ]]; then
   echo "error: $JNI_DIR not found (run from repo root)" >&2
   exit 1
 fi
@@ -60,15 +65,22 @@ SHA_FILE="$OUT_DIR/SHA256SUMS.txt"
 : >"$SHA_FILE"
 
 packed=0
-for abi_dir in "$JNI_DIR"/*/; do
-  abi="$(basename "$abi_dir")"
+ABIS=(arm64-v8a armeabi-v7a x86 x86_64)
+for abi in "${ABIS[@]}"; do
   for entry in "${ADDONS[@]}"; do
     addon_id="${entry%%:*}"
     rest="${entry#*:}"
     so_name="${rest%%:*}"
     bin_name="${rest#*:}"
-    src="$abi_dir$so_name"
-    [[ -f "$src" ]] || continue
+    jni_src="$JNI_DIR/$abi/$so_name"
+    vendor_src="$VENDOR_DIR/$abi/$bin_name"
+    if [[ -f "$vendor_src" ]]; then
+      src="$vendor_src"
+    elif [[ -f "$jni_src" ]]; then
+      src="$jni_src"
+    else
+      continue
+    fi
 
     stage="$WORK/$addon_id-$abi"
     mkdir -p "$stage"

@@ -6,6 +6,7 @@ import com.v2rayez.app.data.service.TOR_TUN_DNS_SERVER
 import com.v2rayez.app.data.service.TunnelHealthSnapshot
 import com.v2rayez.app.data.service.dnsIpsForTun
 import com.v2rayez.app.data.service.needsReconnectTeardown
+import com.v2rayez.app.data.service.protocolRuntimeAvailable
 import com.v2rayez.app.data.service.torSupportsServerProtocol
 import com.v2rayez.app.data.service.tunnelDeathReason
 import com.v2rayez.app.domain.model.AppSettings
@@ -164,5 +165,20 @@ class VpnLifecyclePolicyTest {
             )
         )
         assertEquals(null, tunnelDeathReason(TunnelHealthSnapshot()))
+    }
+
+    @Test
+    fun protocolRuntimeGateDistinguishesMissingAndPresentPacks() {
+        assertFalse(protocolRuntimeAvailable(Protocol.PSIPHON, singBoxAvailable = true, addonAvailable = false))
+        assertTrue(protocolRuntimeAvailable(Protocol.PSIPHON, singBoxAvailable = false, addonAvailable = true))
+        assertFalse(protocolRuntimeAvailable(Protocol.DNSTUNNEL, singBoxAvailable = true, addonAvailable = false))
+        assertTrue(protocolRuntimeAvailable(Protocol.DNSTUNNEL, singBoxAvailable = false, addonAvailable = true))
+    }
+
+    @Test
+    fun sshRuntimeGateRequiresSingBoxButOrdinaryProtocolsDoNot() {
+        assertFalse(protocolRuntimeAvailable(Protocol.SSH, singBoxAvailable = false, addonAvailable = true))
+        assertTrue(protocolRuntimeAvailable(Protocol.SSH, singBoxAvailable = true, addonAvailable = false))
+        assertTrue(protocolRuntimeAvailable(Protocol.VLESS, singBoxAvailable = false, addonAvailable = false))
     }
 }

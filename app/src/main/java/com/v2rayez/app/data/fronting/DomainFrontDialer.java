@@ -376,16 +376,24 @@ public final class DomainFrontDialer {
     private Socket openRemote(String target) throws IOException {
         Socket socket = new Socket();
         openSockets.add(socket);
-        socket.bind(new InetSocketAddress(0));
-        SocketProtector protector = socketProtector;
-        if (protector != null) {
-            boolean ok = protector.protect(socket);
-            if (!ok) emit("WARN protect() failed for " + target + ":" + connectPort);
+        try {
+            socket.bind(new InetSocketAddress(0));
+            SocketProtector protector = socketProtector;
+            if (protector == null) {
+                throw new IOException("VPN socket protector is not configured");
+            }
+            if (!protector.protect(socket)) {
+                throw new IOException("VpnService.protect failed");
+            }
+            socket.connect(new InetSocketAddress(target, connectPort), 15000);
+            socket.setTcpNoDelay(true);
+            socket.setKeepAlive(true);
+            return socket;
+        } catch (IOException e) {
+            closeQuietly(socket);
+            openSockets.remove(socket);
+            throw e;
         }
-        socket.connect(new InetSocketAddress(target, connectPort), 15000);
-        socket.setTcpNoDelay(true);
-        socket.setKeepAlive(true);
-        return socket;
     }
 
     private List<StrategyAttempt> buildStrategyAttempts(byte[] firstData, String target) {
@@ -459,7 +467,8 @@ public final class DomainFrontDialer {
             probe = new Socket();
             probe.bind(new InetSocketAddress(0));
             SocketProtector protector = socketProtector;
-            if (protector != null) protector.protect(probe);
+            if (protector == null) throw new IOException("VPN socket protector is not configured");
+            if (!protector.protect(probe)) throw new IOException("VpnService.protect failed");
             probe.connect(new InetSocketAddress(target, connectPort), 800);
             probe.setTcpNoDelay(true);
             byte[] fakeHello = TlsClientHello.buildFakeClientHello(fakeSni);
@@ -579,6 +588,7 @@ public final class DomainFrontDialer {
     private void recordFailure(String target, String reason) {
         synchronized (targetLock) {
             if (!target.equals(ACTIVE_TARGET)) return;
+            LAST_ERROR = "Front " + target + ":" + connectPort + " failed: " + nonempty(reason, "unknown error");
             currentFailureCount++;
             emit("FAIL " + target + " " + currentFailureCount + "/" + FAILOVER_THRESHOLD + " " + reason);
             if (!fallbackAddress.isEmpty() && !fallbackAddress.equals(ACTIVE_TARGET)
@@ -593,7 +603,10 @@ public final class DomainFrontDialer {
 
     private void recordSuccess(String target) {
         synchronized (targetLock) {
-            if (target.equals(ACTIVE_TARGET)) currentFailureCount = 0;
+            if (target.equals(ACTIVE_TARGET)) {
+                currentFailureCount = 0;
+                LAST_ERROR = "";
+            }
         }
     }
 

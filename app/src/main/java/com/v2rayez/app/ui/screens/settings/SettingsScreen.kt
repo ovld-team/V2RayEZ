@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Route
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +48,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.os.Build
+import android.widget.Toast
 import com.v2rayez.app.R
 import com.v2rayez.app.data.widget.QuickConnectWidgetProvider
 import com.v2rayez.app.ui.components.CardSurface
@@ -76,6 +78,7 @@ fun SettingsScreen(
     backupViewModel: BackupViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val reportStatus by viewModel.reportStatus.collectAsState()
     var picker by remember { mutableStateOf<String?>(null) }
     var pendingBackupAction by remember { mutableStateOf<String?>(null) }
 
@@ -84,8 +87,14 @@ fun SettingsScreen(
     val backupMessage by backupViewModel.message.collectAsState()
     LaunchedEffect(backupMessage) {
         backupMessage?.let {
-            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
             backupViewModel.clearMessage()
+        }
+    }
+    LaunchedEffect(reportStatus) {
+        reportStatus?.let { status ->
+            Toast.makeText(context, bugReportToastText(context, status), Toast.LENGTH_LONG).show()
+            viewModel.clearReportStatus()
         }
     }
     val exportLauncher = rememberLauncherForActivityResult(
@@ -184,6 +193,13 @@ fun SettingsScreen(
                 Divider()
                 SettingRow(Icons.AutoMirrored.Filled.List, stringResource(R.string.settings_logs), onClick = onOpenLogs)
                 Divider()
+                SettingRow(
+                    Icons.Filled.BugReport,
+                    stringResource(R.string.report_bug),
+                    subtitle = stringResource(R.string.report_bug_sub),
+                    onClick = viewModel::reportBug
+                )
+                Divider()
                 SettingRow(Icons.Filled.BarChart, stringResource(R.string.settings_statistics), subtitle = stringResource(R.string.settings_statistics_sub), onClick = onOpenStatistics)
                 Divider()
                 SettingRow(Icons.Filled.Backup, stringResource(R.string.settings_backup), subtitle = stringResource(R.string.settings_backup_sub), onClick = {
@@ -276,6 +292,21 @@ fun SettingsScreen(
  * Send the user to Android's battery-optimization list so they can exempt the app and keep the
  * tunnel alive under Doze. Uses the no-permission settings list (not the direct request dialog).
  */
+private fun bugReportToastText(context: android.content.Context, status: String): String {
+    if (status == "report_failed") return context.getString(R.string.report_bug_fail)
+    val firebase = if (status.endsWith(":firebase_ok")) {
+        context.getString(R.string.report_bug_firebase_ok)
+    } else {
+        context.getString(R.string.report_bug_firebase_failed)
+    }
+    val message = when {
+        status.startsWith("sentry_ok:") -> R.string.report_bug_sentry_ok
+        status.startsWith("sentry_dsn_missing:") -> R.string.report_bug_sentry_dsn_missing
+        else -> R.string.report_bug_sentry_failed
+    }
+    return context.getString(message, firebase)
+}
+
 private fun requestBatteryExemption(context: android.content.Context) {
     val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
     val alreadyExempt = pm?.isIgnoringBatteryOptimizations(context.packageName) == true

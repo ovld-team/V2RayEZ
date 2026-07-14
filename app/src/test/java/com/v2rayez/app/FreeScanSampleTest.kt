@@ -5,6 +5,9 @@ import com.v2rayez.app.domain.model.Protocol
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.ServerGroup
 import com.v2rayez.app.ui.viewmodel.FreeServersViewModel
+import com.v2rayez.app.ui.viewmodel.FreeProbeMode
+import com.v2rayez.app.ui.viewmodel.FreeProbeProgress
+import com.v2rayez.app.ui.viewmodel.afterBatch
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -105,5 +108,32 @@ class FreeScanSampleTest {
         assertTrue(!result.success)
         assertEquals(-1, result.pingMs)
         assertEquals("Timed out", result.message)
+    }
+
+    @Test
+    fun bestTenIsActuallyRankedByMeasuredLatency() {
+        val servers = (1..15).map(::server)
+        val pings = servers.associate { it.id to (160 - it.id.substringAfter('-').toInt() * 7) } +
+            mapOf(servers[2].id to -1)
+
+        val ranked = FreeServersViewModel.rankByLatency(servers, pings, limit = 10)
+
+        assertEquals(10, ranked.size)
+        assertTrue(ranked.none { it.id == servers[2].id })
+        assertEquals(
+            ranked.map { pings.getValue(it.id) }.sorted(),
+            ranked.map { pings.getValue(it.id) }
+        )
+    }
+
+    @Test
+    fun probeProgressTracksCompletionAndFailuresIndependently() {
+        val initial = FreeProbeProgress(FreeProbeMode.ALL, completed = 0, total = 6)
+        val afterFirstBatch = initial.afterBatch(listOf(true, false, true))
+        val afterSecondBatch = afterFirstBatch.afterBatch(listOf(false, true, true))
+
+        assertEquals(FreeProbeMode.ALL, afterSecondBatch.mode)
+        assertEquals(6, afterSecondBatch.completed)
+        assertEquals(2, afterSecondBatch.failed)
     }
 }

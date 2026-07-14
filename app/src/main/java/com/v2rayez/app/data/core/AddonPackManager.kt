@@ -129,13 +129,19 @@ class AddonPackManager @Inject constructor(
                     val name = a["name"]?.jsonPrimitive?.content ?: continue
                     if (name.equals(wantAsset, ignoreCase = true)) {
                         val url = a["browser_download_url"]?.jsonPrimitive?.content ?: continue
+                        // GitHub now exposes an immutable asset digest. Prefer it over a
+                        // separately downloaded sums file so every current release install is
+                        // hash-verified even when SHA256SUMS.txt is censored/unreachable.
+                        val digest = a["digest"]?.jsonPrimitive?.content
+                            ?.removePrefix("sha256:")
+                            ?.takeIf { it.matches(Regex("[0-9a-fA-F]{64}")) }
                         return AddonRelease(
                             packId = packId,
                             version = tag,
                             downloadUrl = url,
                             assetName = name,
                             abi = abi,
-                            sha256 = null
+                            sha256 = digest
                         )
                     }
                 }
@@ -239,8 +245,12 @@ class AddonPackManager @Inject constructor(
                 ?: error("empty releases response")
             val found = parseReleaseJson(body, packId, wantAsset, abi, pinnedTag.isNotEmpty())
             if (found != null) {
-                val sha = fetchSha256ForAsset(repo, found.version, found.assetName)
-                if (sha != null) found.copy(sha256 = sha) else found
+                if (found.sha256 != null) {
+                    found
+                } else {
+                    val sha = fetchSha256ForAsset(repo, found.version, found.assetName)
+                    if (sha != null) found.copy(sha256 = sha) else found
+                }
             } else null
         }.onFailure { Log.e(TAG, "resolveRelease failed for ${packId.label}", it) }
             .getOrNull()

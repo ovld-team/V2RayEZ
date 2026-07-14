@@ -18,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileDownload
@@ -45,6 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import android.widget.Toast
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.v2rayez.app.R
 import com.v2rayez.app.domain.model.LogLevel
@@ -59,6 +61,7 @@ import com.v2rayez.app.ui.viewmodel.LogsViewModel
 @Composable
 fun LogsScreen(onBack: () -> Unit, viewModel: LogsViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
+    val reportStatus by viewModel.reportStatus.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var searchExpanded by remember { mutableStateOf(false) }
@@ -67,6 +70,12 @@ fun LogsScreen(onBack: () -> Unit, viewModel: LogsViewModel = hiltViewModel()) {
     LaunchedEffect(state.filtered.size, state.autoScroll) {
         if (state.autoScroll && state.filtered.isNotEmpty()) {
             listState.animateScrollToItem(state.filtered.size - 1)
+        }
+    }
+    LaunchedEffect(reportStatus) {
+        reportStatus?.let { status ->
+            Toast.makeText(context, bugReportToastText(context, status), Toast.LENGTH_LONG).show()
+            viewModel.clearReportStatus()
         }
     }
 
@@ -140,9 +149,25 @@ fun LogsScreen(onBack: () -> Unit, viewModel: LogsViewModel = hiltViewModel()) {
                     val file = viewModel.export()
                     if (file != null) shareLogFile(context, file)
                 }
-            }
+            },
+            onReportBug = viewModel::reportBug
         )
     }
+}
+
+private fun bugReportToastText(context: android.content.Context, status: String): String {
+    if (status == "report_failed") return context.getString(R.string.report_bug_fail)
+    val firebase = if (status.endsWith(":firebase_ok")) {
+        context.getString(R.string.report_bug_firebase_ok)
+    } else {
+        context.getString(R.string.report_bug_firebase_failed)
+    }
+    val message = when {
+        status.startsWith("sentry_ok:") -> R.string.report_bug_sentry_ok
+        status.startsWith("sentry_dsn_missing:") -> R.string.report_bug_sentry_dsn_missing
+        else -> R.string.report_bug_sentry_failed
+    }
+    return context.getString(message, firebase)
 }
 
 private fun shareLogFile(context: android.content.Context, file: java.io.File) {
@@ -165,7 +190,8 @@ private fun LogsBottomBar(
     autoScroll: Boolean,
     onAutoScrollChange: (Boolean) -> Unit,
     onClear: () -> Unit,
-    onExport: () -> Unit
+    onExport: () -> Unit,
+    onReportBug: () -> Unit
 ) {
     Row(
         modifier = Modifier
@@ -175,7 +201,9 @@ private fun LogsBottomBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         LogsChipButton(Icons.Filled.FileDownload, stringResource(R.string.logs_export), onExport)
-        HSpacer(10)
+        HSpacer(8)
+        LogsChipButton(Icons.Filled.BugReport, stringResource(R.string.report_bug), onReportBug)
+        HSpacer(8)
         LogsChipButton(Icons.Filled.DeleteOutline, stringResource(R.string.logs_clear), onClear)
         Box(Modifier.weight(1f))
         Text(stringResource(R.string.logs_auto_scroll), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

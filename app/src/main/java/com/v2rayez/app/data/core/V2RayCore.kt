@@ -12,6 +12,7 @@ import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -54,11 +55,19 @@ class V2RayCore @Inject constructor(
     private var controller: CoreController? = null
     @Volatile private var initialized = false
     @Volatile private var statsErrorLogged = false
+    @Volatile private var startError: String? = null
+    @Volatile private var lastStatus: String? = null
 
     /** Status callback: (code, message) emitted from the Go core. */
     var onStatus: ((Long, String) -> Unit)? = null
 
     val isRunning: Boolean get() = synchronized(stateLock) { controller?.isRunning == true }
+
+    /**
+     * Startup-only failure detail (init / startLoop). Never falls back to mid-session
+     * [lastStatus] callbacks — those can poison connect-error UI after a clean start.
+     */
+    fun lastStartError(): String? = startError
 
     /** Copy the bundled geo assets into files dir and initialise the core env once. */
     fun ensureInitialized(): Boolean {
@@ -69,7 +78,10 @@ class V2RayCore @Inject constructor(
             copyGeoAssets(assetDir)
             val ok = runCatching {
                 Libv2ray.initCoreEnv(assetDir.absolutePath, "")
-            }.onFailure { Log.e(TAG, "initCoreEnv failed", it) }.isSuccess
+            }.onFailure {
+                startError = throwableDetail("Xray environment initialization failed", it)
+                Log.e(TAG, "initCoreEnv failed", it)
+            }.isSuccess
             if (ok) initialized = true
             return ok
         }
@@ -104,15 +116,30 @@ class V2RayCore @Inject constructor(
     }
 
     private fun startLoopUnlocked(configJson: String, tunFd: Int): Boolean {
+        startError = null
+        lastStatus = null
         if (!ensureInitialized()) return false
         val existing = synchronized(stateLock) { controller }
         if (existing?.isRunning == true) return true
 
+        // Only fold status into startError while startLoop is in flight — runtime
+        // onEmitStatus after a successful start must not overwrite startup diagnostics.
+        val capturingStartStatus = AtomicBoolean(true)
         val handler = object : CoreCallbackHandler {
             override fun startup(): Long = 0L
             override fun shutdown(): Long = 0L
             override fun onEmitStatus(code: Long, message: String?): Long {
-                onStatus?.invoke(code, message.orEmpty())
+                val detail = message.orEmpty().trim()
+                if (detail.isNotBlank()) {
+                    lastStatus = "Xray status $code: $detail"
+                    if (capturingStartStatus.get() &&
+                        (code != 0L || detail.looksLikeCoreFailure())
+                    ) {
+                        startError = lastStatus
+                    }
+                }
+                runCatching { onStatus?.invoke(code, detail) }
+                    .onFailure { Log.w(TAG, "onStatus consumer failed", it) }
                 return 0L
             }
         }
@@ -120,8 +147,35 @@ class V2RayCore @Inject constructor(
             val c = Libv2ray.newCoreController(handler)
             c.startLoop(configJson, tunFd)
             synchronized(stateLock) { controller = c }
-            true
-        }.onFailure { Log.e(TAG, "startLoop failed (tunFd=$tunFd)", it) }.getOrDefault(false)
+            if (!c.isRunning) {
+                capturingStartStatus.set(false)
+                startError = startError ?: lastStatus ?: "Xray returned without a running core"
+                false
+            } else {
+                capturingStartStatus.set(false)
+                startError = null
+                true
+            }
+        }.onFailure {
+            capturingStartStatus.set(false)
+            startError = throwableDetail("Xray start failed", it)
+            Log.e(TAG, "startLoop failed (tunFd=$tunFd): $startError", it)
+        }.getOrDefault(false)
+    }
+
+    private fun String.looksLikeCoreFailure(): Boolean {
+        val lower = lowercase()
+        return listOf("error", "failed", "failure", "invalid", "cannot", "unable", "panic", "fatal")
+            .any(lower::contains)
+    }
+
+    private fun throwableDetail(prefix: String, throwable: Throwable): String {
+        val chain = generateSequence(throwable) { it.cause?.takeIf { cause -> cause !== it } }
+            .mapNotNull { it.message?.trim()?.takeIf(String::isNotBlank) }
+            .distinct()
+            .take(4)
+            .joinToString(" → ")
+        return if (chain.isBlank()) "$prefix (${throwable.javaClass.simpleName})" else "$prefix: $chain"
     }
 
     /** Stop the running tunnel core; waits for any in-flight exclusive op. */

@@ -8,6 +8,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
@@ -53,6 +57,24 @@ sealed class DownloadOutcome {
     data class Failed(val error: DownloadError) : DownloadOutcome()
 }
 
+/** Live phase of a tagged [DownloadTransport.download] call — drives Core-manager queue UX. */
+enum class DownloadPhase { RUNNING, SUCCESS, FAILED, CANCELLED }
+
+/**
+ * Byte-level progress for one tagged download, published on [DownloadTransport.progress].
+ * [totalBytes] is `-1` until the server's `Content-Length` is known (then [fraction] is null —
+ * callers should show an indeterminate spinner).
+ */
+data class DownloadProgress(
+    val tag: String,
+    val bytesDownloaded: Long = 0L,
+    val totalBytes: Long = -1L,
+    val phase: DownloadPhase = DownloadPhase.RUNNING
+) {
+    val fraction: Float?
+        get() = if (totalBytes > 0) (bytesDownloaded.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f) else null
+}
+
 /**
  * Bridge to [android.net.VpnService.protect] so a direct-mode download socket escapes this
  * app's own tunnel instead of looping back into the TUN it owns. Set by the VPN service while
@@ -93,6 +115,21 @@ class DownloadTransport @Inject constructor(
     /** Tags whose download must stop for good — checked by the retry loop, not just the live call. */
     private val cancelledTags: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
+    private val _progress = MutableStateFlow<Map<String, DownloadProgress>>(emptyMap())
+
+    /** Live byte-progress for every tagged download in flight (or recently finished). */
+    val progress: StateFlow<Map<String, DownloadProgress>> = _progress.asStateFlow()
+
+    private fun updateProgress(tag: String?, transform: (DownloadProgress) -> DownloadProgress) {
+        if (tag == null) return
+        _progress.update { map -> map + (tag to transform(map[tag] ?: DownloadProgress(tag))) }
+    }
+
+    /** Drop a finished entry from [progress] once the UI has shown/dismissed it. */
+    fun clearProgress(tag: String) {
+        _progress.update { it - tag }
+    }
+
     fun setSocketProtector(protector: SocketProtector?) {
         socketProtector = protector
     }
@@ -109,6 +146,7 @@ class DownloadTransport @Inject constructor(
     fun cancel(tag: String) {
         cancelledTags.add(tag)
         activeCalls.remove(tag)?.cancel()
+        updateProgress(tag) { it.copy(phase = DownloadPhase.CANCELLED) }
     }
 
     /**
@@ -146,6 +184,7 @@ class DownloadTransport @Inject constructor(
         tag: String? = null
     ): DownloadOutcome = withContext(Dispatchers.IO) {
         if (tag != null) cancelledTags.remove(tag) // fresh download resets an old cancel mark
+        updateProgress(tag) { DownloadProgress(it.tag, phase = DownloadPhase.RUNNING) }
         val tunnelEndpoint = proxyEndpointProvider?.activeSocksEndpoint()
         val plan = planAttempts(mode, tunnelEndpoint != null)
         if (mode == DownloadMode.THROUGH && tunnelEndpoint == null) {
@@ -175,13 +214,16 @@ class DownloadTransport @Inject constructor(
                         tmp.copyTo(destination, overwrite = true)
                         tmp.delete()
                     }
+                    updateProgress(tag) { it.copy(bytesDownloaded = bytes, phase = DownloadPhase.SUCCESS) }
                     return@withContext DownloadOutcome.Success(destination, bytes, kind == AttemptKind.PROXIED)
                 } catch (c: CancellationException) {
                     tmp.delete()
+                    updateProgress(tag) { it.copy(phase = DownloadPhase.CANCELLED) }
                     throw c
                 } catch (t: Throwable) {
                     tmp.delete()
                     if (tag != null && tag in cancelledTags) {
+                        updateProgress(tag) { it.copy(phase = DownloadPhase.CANCELLED) }
                         return@withContext DownloadOutcome.Failed(DownloadError.Cancelled(url))
                     }
                     lastError = mapError(url, t)
@@ -194,6 +236,7 @@ class DownloadTransport @Inject constructor(
                 }
             }
         }
+        updateProgress(tag) { it.copy(phase = DownloadPhase.FAILED) }
         DownloadOutcome.Failed(lastError)
     }
 
@@ -232,7 +275,10 @@ class DownloadTransport @Inject constructor(
         return response.use { resp ->
             if (!resp.isSuccessful) throw HttpStatusException(resp.code, url)
             val body = resp.body ?: throw IOException("Empty response body for $url")
-            var total = 0L
+            val contentLength = body.contentLength()
+            updateProgress(tag) { it.copy(bytesDownloaded = 0, totalBytes = contentLength, phase = DownloadPhase.RUNNING) }
+            var written = 0L
+            var lastReported = 0L
             tmp.outputStream().use { out ->
                 body.byteStream().use { input ->
                     val buffer = ByteArray(64 * 1024)
@@ -241,11 +287,18 @@ class DownloadTransport @Inject constructor(
                         val n = input.read(buffer)
                         if (n < 0) break
                         out.write(buffer, 0, n)
-                        total += n
+                        written += n
+                        // Throttle StateFlow emissions to ~256KB steps — enough for a smooth
+                        // progress bar without hammering collectors on every 64KB chunk.
+                        if (written - lastReported >= 256 * 1024) {
+                            lastReported = written
+                            updateProgress(tag) { it.copy(bytesDownloaded = written) }
+                        }
                     }
                 }
             }
-            total
+            updateProgress(tag) { it.copy(bytesDownloaded = written) }
+            written
         }
     }
 

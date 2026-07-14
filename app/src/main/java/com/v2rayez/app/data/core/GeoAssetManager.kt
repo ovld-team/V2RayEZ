@@ -62,6 +62,14 @@ class GeoAssetManager @Inject constructor(
         private const val MIN_GEOSITE_BYTES = 512L * 1024
     }
 
+    /** Progress/cancel tags used for the two underlying [fetchOne] calls — Core manager combines them. */
+    fun downloadTags(): List<String> = listOf("geo-$GEOIP", "geo-$GEOSITE")
+
+    /** Cancel an in-flight [download], if any. */
+    fun cancelDownload() {
+        downloadTags().forEach { downloadTransport.cancel(it) }
+    }
+
     /** Same directory [V2RayCore] passes to `initCoreEnv`. */
     fun assetDir(): File = File(context.filesDir, "assets").apply { mkdirs() }
 

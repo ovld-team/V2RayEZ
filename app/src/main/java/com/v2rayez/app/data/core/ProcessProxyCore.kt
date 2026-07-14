@@ -433,6 +433,12 @@ class CoreBinaryManager @Inject constructor(
      * extract with [NativeBinaryStore], and reject anything whose ELF arch doesn't match this
      * device before it's ever marked executable.
      */
+    /** Stable progress/cancel tag for one core download — matches [cancelDownload]. */
+    fun downloadTag(type: ProxyCoreType, tag: String): String = "core:${type.name}:$tag"
+
+    /** Cancel an in-flight [downloadAndInstall]/[downloadLatest] for [type]/[tag], if any. */
+    fun cancelDownload(type: ProxyCoreType, tag: String) = downloadTransport.cancel(downloadTag(type, tag))
+
     suspend fun downloadAndInstall(
         type: ProxyCoreType,
         release: RemoteRelease,
@@ -451,7 +457,12 @@ class CoreBinaryManager @Inject constructor(
             tmp.mkdirs()
             val archive = File(tmp, release.assetName)
             Log.i(TAG, "Downloading ${release.assetName} for ${deviceAbi.androidAbi} (mode=$mode)")
-            val outcome = downloadTransport.download(release.downloadUrl, archive, mode = mode)
+            val outcome = downloadTransport.download(
+                release.downloadUrl,
+                archive,
+                mode = mode,
+                tag = downloadTag(type, release.tag)
+            )
             val downloaded = outcome as? DownloadOutcome.Success
                 ?: error("download failed: ${(outcome as DownloadOutcome.Failed).error.message}")
             if (release.sha256.isNullOrBlank()) {

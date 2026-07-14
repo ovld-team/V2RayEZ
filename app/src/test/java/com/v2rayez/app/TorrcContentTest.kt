@@ -19,6 +19,7 @@ class TorrcContentTest {
         assertTrue(text.contains("SocksPort 127.0.0.1:9050"))
         assertTrue(text.contains("DNSPort 127.0.0.1:9053"))
         assertTrue(text.contains("AutomapHostsOnResolve 1"))
+        assertTrue(text.contains("SafeLogging 1"))
         assertTrue(text.contains("DataDirectory /tmp/tor-data"))
     }
 

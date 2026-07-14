@@ -92,6 +92,24 @@ class FirebaseTelemetry @Inject constructor(
         }
     }
 
+    /**
+     * User bug report: breadcrumb-sized logs + one non-fatal marker. [scrubbedBody] must already
+     * be PII-scrubbed (Crashlytics has no beforeSend hook).
+     */
+    fun recordBugReport(scrubbedBody: String): Boolean {
+        return runCatching {
+            val c = crashlytics ?: return false
+            c.log("bug_report_start")
+            scrubbedBody.lineSequence().take(60).forEach { line ->
+                c.log(line.take(100))
+            }
+            c.setCustomKey("bug_report", true)
+            c.recordException(RuntimeException("User bug report"))
+            c.sendUnsentReports()
+            true
+        }.getOrDefault(false)
+    }
+
     private companion object {
         const val TAG = "FirebaseTelemetry"
     }

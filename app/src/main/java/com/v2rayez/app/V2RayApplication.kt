@@ -31,6 +31,7 @@ class V2RayApplication : Application(), Configuration.Provider {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var torController: TorController
     @Inject lateinit var iranGeoAutoConfigurator: com.v2rayez.app.data.core.IranGeoAutoConfigurator
+    @Inject lateinit var packInstallCoordinator: com.v2rayez.app.data.core.PackInstallCoordinator
 
     @Inject lateinit var firebaseTelemetry: com.v2rayez.app.data.analytics.FirebaseTelemetry
     @Inject lateinit var remoteTelemetry: com.v2rayez.app.data.analytics.RemoteTelemetry
@@ -58,6 +59,7 @@ class V2RayApplication : Application(), Configuration.Provider {
         runCatching { SubscriptionRefreshWorker.schedule(this) }
             .onFailure { Log.w("V2RayApplication", "WorkManager schedule failed", it) }
         appScope.launch { iranGeoAutoConfigurator.applyIfNeeded() }
+        packInstallCoordinator.start()
         appScope.launch {
             runCatching {
                 settingsRepository.settings().collect { firebaseTelemetry.applyConsent(it) }

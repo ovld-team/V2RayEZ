@@ -75,4 +75,19 @@ class PerAppTunnelPolicyTest {
         assertEquals(PerAppTunnelPolicy.Mode.FULL_DEVICE_EXCEPT_SELF, decision.mode)
         assertEquals(setOf(self), decision.packages)
     }
+
+    @Test
+    fun builderApplicationReportsRejectedPackages() {
+        val decision = PerAppTunnelPolicy.Decision(
+            mode = PerAppTunnelPolicy.Mode.ALLOW_LIST,
+            packages = setOf("com.present", "com.missing")
+        )
+        val failures = PerAppTunnelPolicy.applyToBuilder(
+            addDisallowed = {},
+            addAllowed = { if (it == "com.missing") error("not installed") },
+            decision = decision
+        )
+
+        assertEquals(listOf("com.missing"), failures)
+    }
 }

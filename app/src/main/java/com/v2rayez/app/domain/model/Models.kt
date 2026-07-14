@@ -168,6 +168,13 @@ data class ConnectionState(
     /** Last connection failure reason, shown on Home; cleared on connect. */
     val errorMessage: String? = null,
     /**
+     * True when [errorMessage] is caused by a missing on-demand pack/core binary (sing-box,
+     * Psiphon, DNS tunnel, ByeDPI, …) rather than a bad server config — Home shows an
+     * "Open Core manager" CTA instead of just the raw text. Locale-independent (not inferred
+     * from the translated error string).
+     */
+    val needsCoreManager: Boolean = false,
+    /**
      * True when the OS started this VPN session via the system "Always-on VPN" setting
      * (queried via VpnService.isAlwaysOn on API 29+). Only meaningful while connected.
      */
@@ -213,8 +220,10 @@ object LogTags {
     const val MITM = "MITM"
     const val CORE = "Core"
     const val DOWNLOAD = "Download"
+    const val ROUTING = "Routing"
+    const val FREE = "Free"
 
-    val ALL = listOf(VPN, TOR, MITM, CORE, DOWNLOAD)
+    val ALL = listOf(VPN, TOR, MITM, CORE, DOWNLOAD, ROUTING, FREE)
 }
 
 /** Home "Recent Activity" row and generic timeline events. */

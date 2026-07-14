@@ -117,10 +117,54 @@ jobs:
             -Pv2rayez.addons.githubRepo="${{ env.ADDONS_REPO }}" \
             -Pv2rayez.addons.releaseTag="${{ steps.ver.outputs.tag }}"
 
+      - name: Fetch checksum-pinned vendor addons
+        run: |
+          set -euo pipefail
+          MANIFEST=scripts/addon-vendor-sources.json
+          STAGE=build/vendor-addons
+          mkdir -p "$STAGE"
+
+          # Empty URLs are documented placeholders: releases continue with the addon binaries
+          # already tracked under jniLibs. Once an upstream direct executable URL exists, pin its
+          # SHA-256 in the manifest; this step downloads and renames it for the common packer.
+          jq -r '
+            .vendors[] as $vendor
+            | $vendor.sources
+            | to_entries[]
+            | select(.value.url != "")
+            | [$vendor.packId, $vendor.binaryName, .key, .value.url, .value.sha256]
+            | @tsv
+          ' "$MANIFEST" |
+          while IFS=$'\t' read -r pack_id binary_name abi url sha256; do
+            if [[ ! "$url" =~ ^https:// ]]; then
+              echo "error: $pack_id/$abi source must use HTTPS" >&2
+              exit 1
+            fi
+            if [[ ! "$sha256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+              echo "error: $pack_id/$abi requires a pinned SHA-256" >&2
+              exit 1
+            fi
+
+            dest="$STAGE/$abi/$binary_name"
+            mkdir -p "$(dirname "$dest")"
+            curl --fail --location --retry 3 --proto '=https' --tlsv1.2 "$url" --output "$dest"
+            actual="$(sha256sum "$dest" | awk '{print $1}')"
+            if [[ "${actual,,}" != "${sha256,,}" ]]; then
+              echo "error: checksum mismatch for $pack_id/$abi" >&2
+              exit 1
+            fi
+            chmod +x "$dest"
+            readelf -h "$dest" >/dev/null
+            echo "staged $pack_id/$abi as $binary_name"
+          done
+
       - name: Pack addon assets
         run: |
           chmod +x ./scripts/pack-addons.sh
-          ./scripts/pack-addons.sh "${{ steps.ver.outputs.version }}" release-assets/current
+          ./scripts/pack-addons.sh \
+            "${{ steps.ver.outputs.version }}" \
+            release-assets/current \
+            build/vendor-addons
 
       - name: Stage APK + checksums
         run: |

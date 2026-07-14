@@ -167,13 +167,17 @@ class VpnStateHolder @Inject constructor(
         notifyWidgetsThrottled()
     }
 
-    /** Report a connection failure so the UI can show why (instead of crashing/failing silently). */
-    fun setError(message: String) {
+    /**
+     * Report a connection failure so the UI can show why (instead of crashing/failing silently).
+     * [needsCoreManager] flags failures caused by a missing on-demand pack/core binary so Home
+     * can surface an "Open Core manager" CTA regardless of the (possibly localized) message text.
+     */
+    fun setError(message: String, needsCoreManager: Boolean = false) {
         flushPendingTraffic()
         connectStartMs = 0L
         resetSessionCounters()
         _liveThroughput.value = emptyList()
-        _connectionState.value = DISCONNECTED.copy(errorMessage = message)
+        _connectionState.value = DISCONNECTED.copy(errorMessage = message, needsCoreManager = needsCoreManager)
         addActivity(message, ActivityType.DURATION)
         notifyWidgetsImmediate()
     }

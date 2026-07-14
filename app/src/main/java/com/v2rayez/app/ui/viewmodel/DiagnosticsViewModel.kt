@@ -5,11 +5,17 @@ import androidx.lifecycle.viewModelScope
 import com.v2rayez.app.data.core.AddonPackManager
 import com.v2rayez.app.data.core.PackAvailability
 import com.v2rayez.app.data.core.PackSource
+import com.v2rayez.app.data.core.ProcessProxyCore
 import com.v2rayez.app.data.core.V2RayCore
 import com.v2rayez.app.data.sni.SniScanner
 import com.v2rayez.app.data.tor.TorController
 import com.v2rayez.app.data.tor.TorState
+import com.v2rayez.app.data.core.CoreBinaryManager
+import com.v2rayez.app.data.vpn.PerAppTunnelPolicy
+import com.v2rayez.app.domain.model.CORE_VERSION_BUNDLED
 import com.v2rayez.app.domain.model.ConnectionStatus
+import com.v2rayez.app.domain.model.Protocol
+import com.v2rayez.app.domain.model.ProxyCoreType
 import com.v2rayez.app.domain.model.TorTransport
 import com.v2rayez.app.domain.repository.ServerRepository
 import com.v2rayez.app.domain.repository.SettingsRepository
@@ -29,6 +35,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.DatagramPacket
+import java.net.DatagramSocket
 import java.net.Proxy
 import java.net.Socket
 import java.util.concurrent.TimeUnit
@@ -67,9 +75,11 @@ class DiagnosticsViewModel @Inject constructor(
     private val tor: TorController,
     private val sniScanner: SniScanner,
     private val core: V2RayCore,
+    private val processCore: ProcessProxyCore,
     private val settings: SettingsRepository,
     private val servers: ServerRepository,
     private val addonPacks: AddonPackManager,
+    private val binaryManager: CoreBinaryManager,
     baseHttp: OkHttpClient
 ) : ViewModel() {
 
@@ -91,13 +101,38 @@ class DiagnosticsViewModel @Inject constructor(
             val sniDomain = cfg.sni.spoofDomain.ifBlank { cfg.sni.bestSni }
             val sniActive = cfg.sni.spoofEnabled && sniDomain.isNotBlank()
             val offlineServerId = if (!connected) cfg.defaultServerId ?: cfg.lastServerId else null
+            // Independent of connection state: the pinned/last server's protocol may need a
+            // downloadable core (SSH → sing-box) or addon pack (Psiphon/DNS tunnel) that isn't
+            // installed — the honesty row must say so even while happily connected on Xray.
+            val selectedServerId = cfg.defaultServerId ?: cfg.lastServerId
 
             // Build the section skeleton up front so every row shows a spinner immediately.
             val sections = buildList {
                 add(DiagnosticSection(SEC_CONNECTIVITY, listOf(check(ID_INTERNET), check(ID_DNS), check(ID_PUBLIC_IP))))
-                if (connected) add(DiagnosticSection(SEC_TUNNEL, listOf(check(ID_TUNNEL_LATENCY), check(ID_TUNNEL_IP), check(ID_SESSION_TRAFFIC))))
+                add(
+                    DiagnosticSection(
+                        SEC_TUNNEL,
+                        buildList {
+                            add(check(ID_VPN_ACTIVE))
+                            add(check(ID_CORE_RUNNING))
+                            add(check(ID_LOCAL_DNS))
+                            add(check(ID_TUNNEL_GENERATE_204))
+                            add(check(ID_PER_APP_POLICY))
+                            if (connected) {
+                                add(check(ID_TUNNEL_LATENCY))
+                                add(check(ID_TUNNEL_IP))
+                                add(check(ID_SESSION_TRAFFIC))
+                            }
+                        }
+                    )
+                )
                 if (offlineServerId != null) add(DiagnosticSection(SEC_SERVER, listOf(check(ID_SERVER_RTT))))
-                if (torEnabled) add(DiagnosticSection(SEC_TOR, listOf(check(ID_TOR_BOOTSTRAP), check(ID_TOR_SOCKS), check(ID_TOR_EXIT_IP))))
+                if (torEnabled) add(
+                    DiagnosticSection(
+                        SEC_TOR,
+                        listOf(check(ID_TOR_BOOTSTRAP), check(ID_TOR_SOCKS), check(ID_TOR_DNS), check(ID_TOR_EXIT_IP))
+                    )
+                )
                 if (sniActive) add(DiagnosticSection(SEC_SNI, listOf(check(ID_SNI_PROBE))))
                 add(DiagnosticSection(SEC_CORE, listOf(check(ID_CORE_VERSION))))
                 // Honesty rows: always shown so the report never silently omits a subsystem the
@@ -105,7 +140,13 @@ class DiagnosticsViewModel @Inject constructor(
                 add(
                     DiagnosticSection(
                         SEC_SYSTEM,
-                        listOf(check(ID_TOR_PACKS), check(ID_HOTSPOT), check(ID_ALWAYS_ON), check(ID_PENDING_ADDONS))
+                        listOf(
+                            check(ID_PROTOCOL_PACK),
+                            check(ID_TOR_PACKS),
+                            check(ID_HOTSPOT),
+                            check(ID_ALWAYS_ON),
+                            check(ID_PENDING_ADDONS)
+                        )
                     )
                 )
             }
@@ -116,7 +157,12 @@ class DiagnosticsViewModel @Inject constructor(
                     async { runInternet() },
                     async { runDns() },
                     async { runPublicIp() },
-                    async { runCoreVersion() }
+                    async { runCoreVersion() },
+                    async { runVpnActive(connected) },
+                    async { runCoreRunning(connected) },
+                    async { runLocalDns(connected, cfg.enableLocalDns, cfg.dns.remoteDns) },
+                    async { runTunnelGenerate204(connected) },
+                    async { runPerAppPolicy(cfg) }
                 )
                 if (connected) {
                     jobs += async { runTunnelLatency() }
@@ -127,9 +173,11 @@ class DiagnosticsViewModel @Inject constructor(
                 if (torEnabled) {
                     jobs += async { runTorBootstrap() }
                     jobs += async { runTorSocks(cfg.tor.socksHost, cfg.tor.socksPort) }
+                    jobs += async { runTorDns(cfg.tor.socksHost, cfg.tor.dnsPort) }
                     jobs += async { runTorExitIp(cfg.tor.socksHost, cfg.tor.socksPort) }
                 }
                 if (sniActive) jobs += async { runSniProbe(sniDomain) }
+                jobs += async { runProtocolPack(selectedServerId) }
                 jobs += async { runTorPacks(cfg.tor.enabled, cfg.tor.transport) }
                 jobs += async { runHotspot(cfg.allowLan, cfg.enableLanSharing, cfg.socksPort, cfg.httpPort) }
                 jobs += async { runAlwaysOn(connected, cfg.vpnAlwaysOn, conn.alwaysOn) }
@@ -160,6 +208,64 @@ class DiagnosticsViewModel @Inject constructor(
     }
 
     // ------------------------------------------------------------ tunnel
+    private suspend fun runVpnActive(expectedConnected: Boolean) = timed(ID_VPN_ACTIVE) {
+        val state = vpn.connectionState.value.status
+        if (expectedConnected && state == ConnectionStatus.CONNECTED) pass("active")
+        else fail(state.name.lowercase(), "Android VPN state is not connected")
+    }
+
+    private suspend fun runCoreRunning(expectedConnected: Boolean) = timed(ID_CORE_RUNNING) {
+        val xray = core.isRunning
+        val process = processCore.isRunning
+        when {
+            xray -> pass("Xray running")
+            process -> pass("Process core running")
+            expectedConnected -> fail("stopped", "VPN state says connected but no proxy core is running")
+            else -> fail("stopped", "No proxy core is running")
+        }
+    }
+
+    private suspend fun runLocalDns(connected: Boolean, enabled: Boolean, rawServer: String) =
+        timed(ID_LOCAL_DNS) {
+            if (!connected) return@timed fail("VPN inactive", "Connect before testing tunnel DNS")
+            if (!enabled) return@timed skip("disabled")
+            val endpoint = parseDnsEndpoint(rawServer)
+                ?: return@timed fail("invalid resolver", "Configured resolver is not a usable host and port")
+            val ok = probeDnsUdp(endpoint.first, endpoint.second)
+            if (ok && (core.isRunning || processCore.isRunning)) {
+                pass("${endpoint.first}:${endpoint.second}", "Resolver answered a real DNS query while the tunnel core was running")
+            } else {
+                fail("${endpoint.first}:${endpoint.second} unreachable", "Local DNS/upstream resolver did not answer")
+            }
+        }
+
+    private suspend fun runTunnelGenerate204(connected: Boolean) = timed(ID_TUNNEL_GENERATE_204) {
+        if (!connected) return@timed fail("VPN inactive")
+        val ms = withContext(Dispatchers.IO) {
+            if (core.isRunning) core.measureConnectedDelay("https://www.gstatic.com/generate_204")
+            else if (processCore.isRunning) processCore.measureViaSocks(
+                processCore.localSocksPort(),
+                "https://www.gstatic.com/generate_204",
+                timeoutMs = 10_000
+            ) else -1L
+        }
+        if (ms > 0) pass("$ms ms") else fail("unreachable", "generate_204 failed through the active tunnel")
+    }
+
+    private suspend fun runPerAppPolicy(cfg: com.v2rayez.app.domain.model.AppSettings) =
+        timed(ID_PER_APP_POLICY) {
+            val decision = PerAppTunnelPolicy.decide(cfg, "com.v2rayez.app")
+            val conflict = PerAppTunnelPolicy.conflictMessage(cfg)
+            when {
+                conflict != null -> fail("conflict", conflict)
+                !cfg.appProxy.enabled -> skip("disabled")
+                else -> pass(
+                    "${decision.mode.name.lowercase()} · ${decision.packages.size}",
+                    "Policy is valid; reconnect is required after changing the list"
+                )
+            }
+        }
+
     private suspend fun runTunnelLatency() = timed(ID_TUNNEL_LATENCY) {
         val ms = withContext(Dispatchers.IO) { core.measureConnectedDelay() }
         when {
@@ -220,6 +326,11 @@ class DiagnosticsViewModel @Inject constructor(
         if (ok) pass("$host:$port") else fail("$host:$port closed", "The Tor SOCKS port is not accepting connections")
     }
 
+    private suspend fun runTorDns(host: String, port: Int) = timed(ID_TOR_DNS) {
+        val ok = probeDnsUdp(host, port)
+        if (ok) pass("$host:$port") else fail("$host:$port unreachable", "Tor DNSPort did not answer a real DNS query")
+    }
+
     private suspend fun runTorExitIp(host: String, port: Int) = timed(ID_TOR_EXIT_IP) {
         val torClient = http.newBuilder()
             .connectTimeout(10, TimeUnit.SECONDS)
@@ -248,6 +359,45 @@ class DiagnosticsViewModel @Inject constructor(
     }
 
     // ------------------------------------------------------------ system honesty rows
+    /**
+     * Confirms the pinned/last-used server's protocol actually has a runnable engine on this
+     * device — SSH needs a downloaded sing-box binary (Xray has no SSH outbound), Psiphon/DNS
+     * tunnel need their dedicated addon pack. Never claims "Connected" is possible for these
+     * without saying so here first; matches the same gate `V2RayVpnService` enforces at connect.
+     */
+    private suspend fun runProtocolPack(serverId: String?) = timed(ID_PROTOCOL_PACK) {
+        val server = serverId?.let { servers.getServer(it) } ?: return@timed skip("no server selected")
+        when (server.protocol) {
+            Protocol.SSH -> {
+                val version = settings.current().selectedCoreVersions[ProxyCoreType.SING_BOX] ?: CORE_VERSION_BUNDLED
+                if (binaryManager.resolveBinary(ProxyCoreType.SING_BOX, version) != null) {
+                    pass("sing-box ready", "SSH runs on sing-box")
+                } else {
+                    fail("sing-box missing", "SSH requires the sing-box core (Xray has no SSH outbound) — install it in Core manager")
+                }
+            }
+            Protocol.WIREGUARD -> {
+                val version = settings.current().selectedCoreVersions[ProxyCoreType.SING_BOX] ?: CORE_VERSION_BUNDLED
+                if (binaryManager.resolveBinary(ProxyCoreType.SING_BOX, version) != null) {
+                    pass("sing-box ready", "WireGuard runs on sing-box")
+                } else {
+                    warn("sing-box missing", "WireGuard falls back to the built-in Xray outbound — install sing-box in Core manager for the reference client")
+                }
+            }
+            Protocol.PSIPHON -> {
+                val src = addonPacks.packSource(PackAvailability.PSIPHON)
+                if (src != PackSource.MISSING) pass(src.label(), "Psiphon pack: ${src.label()}")
+                else fail("Psiphon pack missing", "Psiphon requires its addon pack — install it in Core manager")
+            }
+            Protocol.DNSTUNNEL -> {
+                val src = addonPacks.packSource(PackAvailability.DNSTUNNEL)
+                if (src != PackSource.MISSING) pass(src.label(), "DNS tunnel pack: ${src.label()}")
+                else fail("DNS tunnel pack missing", "DNS tunnel requires its addon pack — install it in Core manager")
+            }
+            else -> skip("not pack-gated")
+        }
+    }
+
     /** Confirms the Tor daemon (and any pluggable-transport pack the configured transport needs)
      * actually has a runnable binary, instead of letting the UI claim "Tor enabled" while the
      * daemon has nothing to execute. */
@@ -327,6 +477,36 @@ class DiagnosticsViewModel @Inject constructor(
         }.getOrNull()
     }
 
+    private fun parseDnsEndpoint(raw: String): Pair<String, Int>? {
+        val value = raw.trim().substringAfter("://", raw.trim()).substringBefore('/')
+        val host = value.substringBeforeLast(':', value).ifBlank { return null }
+        val port = value.substringAfterLast(':', "").toIntOrNull() ?: 53
+        if (port !in 1..65535) return null
+        return host to port
+    }
+
+    private suspend fun probeDnsUdp(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            val query = byteArrayOf(
+                0x56, 0x32, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+                0x00, 0x00, 0x00, 0x00, 0x0a, 'c'.code.toByte(), 'l'.code.toByte(),
+                'o'.code.toByte(), 'u'.code.toByte(), 'd'.code.toByte(), 'f'.code.toByte(),
+                'l'.code.toByte(), 'a'.code.toByte(), 'r'.code.toByte(), 'e'.code.toByte(),
+                0x03, 'c'.code.toByte(), 'o'.code.toByte(), 'm'.code.toByte(), 0x00,
+                0x00, 0x01, 0x00, 0x01
+            )
+            DatagramSocket().use { socket ->
+                socket.soTimeout = 3_000
+                val address = InetAddress.getByName(host)
+                socket.send(DatagramPacket(query, query.size, address, port))
+                val response = ByteArray(512)
+                val packet = DatagramPacket(response, response.size)
+                socket.receive(packet)
+                packet.length >= 12 && response[0] == query[0] && response[1] == query[1]
+            }
+        }.getOrDefault(false)
+    }
+
     private fun check(id: String) = DiagnosticCheck(id)
 
     companion object {
@@ -342,14 +522,21 @@ class DiagnosticsViewModel @Inject constructor(
         const val ID_DNS = "dns"
         const val ID_PUBLIC_IP = "public_ip"
         const val ID_TUNNEL_LATENCY = "tunnel_latency"
+        const val ID_VPN_ACTIVE = "vpn_active"
+        const val ID_CORE_RUNNING = "core_running"
+        const val ID_LOCAL_DNS = "local_dns"
+        const val ID_TUNNEL_GENERATE_204 = "tunnel_generate_204"
+        const val ID_PER_APP_POLICY = "per_app_policy"
         const val ID_TUNNEL_IP = "tunnel_ip"
         const val ID_SESSION_TRAFFIC = "session_traffic"
         const val ID_SERVER_RTT = "server_rtt"
         const val ID_TOR_BOOTSTRAP = "tor_bootstrap"
         const val ID_TOR_SOCKS = "tor_socks"
+        const val ID_TOR_DNS = "tor_dns"
         const val ID_TOR_EXIT_IP = "tor_exit_ip"
         const val ID_SNI_PROBE = "sni_probe"
         const val ID_CORE_VERSION = "core_version"
+        const val ID_PROTOCOL_PACK = "protocol_pack"
         const val ID_TOR_PACKS = "tor_packs"
         const val ID_HOTSPOT = "hotspot"
         const val ID_ALWAYS_ON = "always_on"

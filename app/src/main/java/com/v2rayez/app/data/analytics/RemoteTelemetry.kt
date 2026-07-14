@@ -3,11 +3,13 @@ package com.v2rayez.app.data.analytics
 import android.content.Context
 import android.util.Log
 import com.v2rayez.app.BuildConfig
+import com.v2rayez.app.domain.model.LogLevel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import io.sentry.Breadcrumb
 import io.sentry.Sentry
 import io.sentry.SentryLevel
 import io.sentry.android.core.SentryAndroid
+import io.sentry.protocol.SentryId
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
@@ -20,6 +22,12 @@ enum class FailureCategory(val tag: String) {
     TOR("tor"),
     MITM("mitm"),
     DOWNLOAD("download")
+}
+
+sealed class SentryBugReportStatus {
+    data class Sent(val eventId: String) : SentryBugReportStatus()
+    data object DsnMissing : SentryBugReportStatus()
+    data class Failed(val reason: String) : SentryBugReportStatus()
 }
 
 /**
@@ -38,12 +46,14 @@ class RemoteTelemetry @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     @Volatile private var initialized = false
+    @Volatile private var initFailure: String? = null
 
     /** Call once early in [com.v2rayez.app.V2RayApplication.onCreate] after Hilt inject. */
     fun init() {
         if (initialized) return
         val dsn = BuildConfig.SENTRY_DSN.trim()
         if (dsn.isBlank()) {
+            initFailure = DSN_MISSING
             Log.i(TAG, "No Sentry DSN configured — telemetry stays a no-op (set sentry.dsn in local.properties)")
             return
         }
@@ -53,7 +63,12 @@ class RemoteTelemetry @Inject constructor(
                 options.environment = if (BuildConfig.DEBUG) "debug" else "release"
                 options.release = "com.v2rayez.app@${BuildConfig.VERSION_NAME}+${BuildConfig.VERSION_CODE}"
 
+                // Keep performance/replay off for the free-plan quota. Debug SDK diagnostics and
+                // automatic sessions still provide an explicit local signal that the SDK is live.
+                options.isDebug = BuildConfig.DEBUG
+                options.setDiagnosticLevel(if (BuildConfig.DEBUG) SentryLevel.DEBUG else SentryLevel.ERROR)
                 options.tracesSampleRate = 0.0
+                options.profilesSampleRate = 0.0
                 options.sessionReplay.sessionSampleRate = 0.0
                 options.sessionReplay.onErrorSampleRate = 0.0
                 options.isEnableAutoSessionTracking = true
@@ -94,8 +109,12 @@ class RemoteTelemetry @Inject constructor(
                 }
             }
             initialized = true
+            initFailure = null
             Log.i(TAG, "Sentry initialized (PRIMARY telemetry, logs enabled)")
-        }.onFailure { Log.w(TAG, "Sentry init failed — continuing without it", it) }
+        }.onFailure {
+            initFailure = PiiScrubber.scrub(it.message ?: it.javaClass.simpleName)
+            Log.w(TAG, "Sentry init failed — continuing without it", it)
+        }
     }
 
     /** Forward fatals from the process uncaught handler (after Sentry's own hook). */
@@ -119,15 +138,77 @@ class RemoteTelemetry @Inject constructor(
     }
 
     /** Non-PII breadcrumb (e.g. Tor bootstrap milestones). No-op when DSN blank. */
-    fun addBreadcrumb(category: String, message: String) {
+    fun addBreadcrumb(category: String, message: String, level: SentryLevel = SentryLevel.INFO) {
         if (!initialized) return
         runCatching {
+            val scrubbed = PiiScrubber.scrub(message)
             val crumb = Breadcrumb().apply {
                 this.category = category.take(64)
-                this.message = PiiScrubber.scrub(message)
-                level = SentryLevel.INFO
+                this.message = scrubbed
+                this.level = level
             }
             Sentry.addBreadcrumb(crumb)
+            when (level) {
+                SentryLevel.FATAL -> Sentry.logger().fatal("[%s] %s", category, scrubbed)
+                SentryLevel.ERROR -> Sentry.logger().error("[%s] %s", category, scrubbed)
+                else -> Unit
+            }
+        }
+    }
+
+    fun addLogBreadcrumb(category: String, level: LogLevel, message: String) {
+        val sentryLevel = when (level) {
+            LogLevel.ERROR -> SentryLevel.ERROR
+            LogLevel.WARNING -> SentryLevel.WARNING
+            LogLevel.DEBUG -> SentryLevel.DEBUG
+            LogLevel.INFO -> SentryLevel.INFO
+        }
+        addBreadcrumb(category, message, sentryLevel)
+    }
+
+    /**
+     * User-initiated bug report: scrubbed diagnostics+logs body as an attachment + INFO message.
+     * No-op when DSN blank. Caller must scrub before calling (defense-in-depth also runs beforeSend).
+     */
+    fun captureBugReport(scrubbedBody: String): SentryBugReportStatus {
+        if (!initialized) {
+            return if (initFailure == DSN_MISSING || BuildConfig.SENTRY_DSN.isBlank()) {
+                SentryBugReportStatus.DsnMissing
+            } else {
+                SentryBugReportStatus.Failed(initFailure ?: "Sentry SDK not initialized")
+            }
+        }
+        if (!Sentry.isEnabled()) return SentryBugReportStatus.Failed("Sentry SDK is disabled")
+        return runCatching {
+            val body = PiiScrubber.scrub(scrubbedBody)
+            val attachment = io.sentry.Attachment(
+                body.toByteArray(Charsets.UTF_8),
+                "bug-report.txt",
+                "text/plain"
+            )
+            var eventId = SentryId.EMPTY_ID
+            Sentry.withScope { scope ->
+                scope.setTag("failure_category", "bug_report")
+                scope.setLevel(SentryLevel.INFO)
+                scope.addAttachment(attachment)
+                eventId = Sentry.captureMessage("User bug report", SentryLevel.INFO)
+            }
+            if (eventId == SentryId.EMPTY_ID) {
+                throw IllegalStateException("Sentry rejected the event")
+            }
+            Sentry.logger().info("User bug report (%d chars)", body.length)
+            addBreadcrumb("bug_report", "User submitted bug report")
+            // Sentry Java 8.x flush() is void (older SDKs returned Boolean). Fail closed when
+            // scopes report unhealthy after the timed flush — same UX as flush==false.
+            Sentry.flush(BUG_REPORT_FLUSH_TIMEOUT_MS)
+            if (!Sentry.getCurrentScopes().isHealthy) {
+                throw IllegalStateException("Sentry flush failed")
+            }
+            SentryBugReportStatus.Sent(eventId.toString())
+        }.getOrElse {
+            val reason = PiiScrubber.scrub(it.message ?: it.javaClass.simpleName)
+            Log.w(TAG, "Sentry bug report failed", it)
+            SentryBugReportStatus.Failed(reason)
         }
     }
 
@@ -168,6 +249,8 @@ class RemoteTelemetry @Inject constructor(
 
     private companion object {
         const val TAG = "RemoteTelemetry"
+        const val DSN_MISSING = "dsn_missing"
+        const val BUG_REPORT_FLUSH_TIMEOUT_MS = 5_000L
 
         /** ~10% sampling for flaky free-server timeout noise. */
         const val FALSE_POSITIVE_SAMPLE_RATE = 0.10

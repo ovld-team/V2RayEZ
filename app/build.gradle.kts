@@ -28,13 +28,16 @@ val localProps = Properties().apply {
 
 /**
  * Sentry DSN: never hardcoded in committed source. Local dev reads `sentry.dsn` from the
- * gitignored `local.properties`; CI passes `-Psentry.dsn=...` instead. Defaults to empty —
- * [com.v2rayez.app.data.analytics.RemoteTelemetry] treats a blank DSN as "stay a no-op".
+ * gitignored `local.properties`; CI may pass `-Psentry.dsn=...` or the `SENTRY_DSN`
+ * environment variable. Defaults to empty — [com.v2rayez.app.data.analytics.RemoteTelemetry]
+ * surfaces that state to the bug-report UI instead of reporting a false success.
  */
 val sentryDsn: String = (project.findProperty("sentry.dsn") as String?)
     ?.takeIf { it.isNotBlank() }
+    ?: System.getenv("SENTRY_DSN")?.takeIf { it.isNotBlank() }
     ?: localProps.getProperty("sentry.dsn")?.takeIf { it.isNotBlank() }
     ?: ""
+val sentryDsnBuildConfig = sentryDsn.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.v2rayez.app"
@@ -44,8 +47,8 @@ android {
         applicationId = "com.v2rayez.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 95
-        versionName = "0.9.95"
+        versionCode = 98
+        versionName = "0.9.98"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -63,9 +66,9 @@ android {
         buildConfigField(
             "String",
             "ADDONS_RELEASE_TAG",
-            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v0.9.95")}\""
+            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v0.9.98")}\""
         )
-        buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
+        buildConfigField("String", "SENTRY_DSN", "\"$sentryDsnBuildConfig\"")
 
         // Ship English + Persian + Russian; strip every other locale (incl. library ones).
         resourceConfigurations += listOf("en", "fa", "ru")
@@ -168,6 +171,12 @@ android {
                 "**/libmihomo.so"
             )
         }
+    }
+
+    // Match CI (:app:lintDebug). No baseline file yet — errors abort the task.
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
     }
 }
 

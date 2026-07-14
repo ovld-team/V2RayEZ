@@ -15,11 +15,14 @@ import com.v2rayez.app.data.mitm.MitmDesktopExporter
 import com.v2rayez.app.data.mock.MockMitmProxyController
 import com.v2rayez.app.data.mock.MockSettingsRepository
 import com.v2rayez.app.data.mock.MockVpnController
+import com.v2rayez.app.data.tor.TorController
 import com.v2rayez.app.domain.model.ConnectionStatus
 import com.v2rayez.app.domain.model.MitmDomainFrontConfig
 import com.v2rayez.app.domain.repository.MitmProxyController
 import com.v2rayez.app.domain.repository.SettingsRepository
 import com.v2rayez.app.domain.repository.VpnController
+import com.v2rayez.app.ui.tor.TorConflictHandler
+import com.v2rayez.app.ui.tor.TorConflictUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -46,7 +49,8 @@ class MitmDomainFrontingViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val vpn: VpnController,
     private val proxy: MitmProxyController,
-    @ApplicationContext private val context: Context?
+    @ApplicationContext private val context: Context?,
+    private val torController: TorController? = null
 ) : ViewModel() {
 
     /** Preview / no-arg constructor. */
@@ -54,8 +58,14 @@ class MitmDomainFrontingViewModel @Inject constructor(
         MockSettingsRepository(),
         MockVpnController(),
         MockMitmProxyController(),
+        null,
         null
     )
+
+    private val torConflict = TorConflictHandler(settings, vpn, viewModelScope, torController)
+    val torConflictDialog: StateFlow<TorConflictUi?> = torConflict.dialog
+    fun confirmTorConflict() = torConflict.confirm()
+    fun dismissTorConflict() = torConflict.dismiss()
 
     val mitm: StateFlow<MitmDomainFrontConfig> = settings.settings()
         .map { it.mitm }
@@ -72,7 +82,11 @@ class MitmDomainFrontingViewModel @Inject constructor(
         vpn.connectionState,
         mitm
     ) { proxyOn, vpnState, cfg ->
-        proxyOn || (cfg.captureAllApps && vpnState.status == ConnectionStatus.CONNECTED)
+        proxyOn || (
+            cfg.captureAllApps &&
+                vpnState.status == ConnectionStatus.CONNECTED &&
+                vpnState.server?.id == "mitm"
+            )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /** True when the device-wide MITM VpnService session is connected. */
@@ -95,6 +109,13 @@ class MitmDomainFrontingViewModel @Inject constructor(
         refreshCaState()
         viewModelScope.launch {
             proxy.lastError.collect { err ->
+                if (!err.isNullOrBlank()) _message.value = err
+            }
+        }
+        viewModelScope.launch {
+            combine(vpn.connectionState, mitm) { vpnState, cfg ->
+                vpnState.errorMessage?.takeIf { cfg.captureAllApps }
+            }.collect { err ->
                 if (!err.isNullOrBlank()) _message.value = err
             }
         }
@@ -128,48 +149,56 @@ class MitmDomainFrontingViewModel @Inject constructor(
 
     fun setCaptureAllApps(capture: Boolean) {
         viewModelScope.launch {
-            val current = settings.current()
-            if (capture && current.tor.routeAllDevice) {
-                _message.value = context?.getString(R.string.mitm_mutex_tor)
-                    ?: "Turn off Tor tunnel-whole-device first"
+            if (!capture) {
+                applyCaptureAllApps(false)
                 return@launch
             }
-            if (capture && !isCaReady()) {
+            if (!isCaReady()) {
                 _message.value = context?.getString(R.string.mitm_ca_capture_requires_install)
                     ?: "Generate the certificate, install it, then confirm it's installed before tunneling the device."
                 return@launch
             }
-            // Switching mode: stop standalone proxy when enabling whole-device.
-            if (capture && proxy.running.value) proxy.stop()
-            // Turning capture off while VPN MITM is up → disconnect.
-            if (!capture && isMitmVpnSession()) {
-                vpn.disconnect()
-            }
-            settings.update {
-                it.copy(
-                    defaultCore = com.v2rayez.app.domain.model.ProxyCoreType.XRAY,
-                    mitm = it.mitm.copy(
-                        enabled = if (capture) true else it.mitm.enabled,
-                        captureAllApps = capture
-                    )
+            val current = settings.current()
+            // VpnService fails MITM capture when any Tor is enabled (not only route-all).
+            torConflict.runOrPrompt(
+                blocked = current.tor.enabled || current.tor.routeAllDevice,
+                messageRes = R.string.tor_conflict_mitm,
+                stopDaemon = true
+            ) { applyCaptureAllApps(true) }
+        }
+    }
+
+    private suspend fun applyCaptureAllApps(capture: Boolean) {
+        // Switching mode: stop standalone proxy when enabling whole-device.
+        if (capture && proxy.running.value) proxy.stop()
+        // Turning capture off while VPN MITM is up → disconnect.
+        if (!capture && isMitmVpnSession()) {
+            vpn.disconnect()
+        }
+        settings.update {
+            it.copy(
+                defaultCore = com.v2rayez.app.domain.model.ProxyCoreType.XRAY,
+                mitm = it.mitm.copy(
+                    enabled = if (capture) true else it.mitm.enabled,
+                    captureAllApps = capture
                 )
-            }
-            if (capture) {
-                when (vpn.connectionState.value.status) {
-                    ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING -> {
-                        // Restart so startTunnel takes the MITM capture branch.
-                        if (!isMitmVpnSession()) {
-                            vpn.disconnect()
-                            // Never toggle while still CONNECTED — wait for a clean disconnect
-                            // first (mirrors TorViewModel.setRouteAllDevice).
-                            withTimeoutOrNull(15_000) {
-                                vpn.connectionState.first { it.status == ConnectionStatus.DISCONNECTED }
-                            }
-                            vpn.toggle()
+            )
+        }
+        if (capture) {
+            when (vpn.connectionState.value.status) {
+                ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING -> {
+                    // Restart so startTunnel takes the MITM capture branch.
+                    if (!isMitmVpnSession()) {
+                        vpn.disconnect()
+                        // Never toggle while still CONNECTED — wait for a clean disconnect
+                        // first (mirrors TorViewModel.setRouteAllDevice).
+                        withTimeoutOrNull(15_000) {
+                            vpn.connectionState.first { it.status == ConnectionStatus.DISCONNECTED }
                         }
+                        vpn.toggle()
                     }
-                    ConnectionStatus.DISCONNECTED -> vpn.toggle()
                 }
+                ConnectionStatus.DISCONNECTED -> vpn.toggle()
             }
         }
     }
@@ -280,32 +309,36 @@ class MitmDomainFrontingViewModel @Inject constructor(
      */
     fun setStandaloneRunning(running: Boolean) {
         viewModelScope.launch {
-            if (running) {
-                if (!isCaReady()) {
-                    _message.value =
-                        "Generate the certificate, install it, then confirm it's installed before starting."
-                    return@launch
-                }
-                val current = settings.current()
-                if (current.tor.routeAllDevice) {
-                    _message.value = context?.getString(R.string.mitm_mutex_tor)
-                        ?: "Turn off Tor tunnel-whole-device first"
-                    return@launch
-                }
-                // Standalone path: never use VPN capture for this toggle.
-                if (current.mitm.captureAllApps &&
-                    vpn.connectionState.value.status == ConnectionStatus.CONNECTED
-                ) {
-                    vpn.disconnect()
-                }
-                settings.update {
-                    it.copy(mitm = it.mitm.copy(enabled = true, captureAllApps = false))
-                }
-                if (!proxy.running.value) proxy.start()
-            } else {
+            if (!running) {
                 if (proxy.running.value) proxy.stop()
+                return@launch
             }
+            if (!isCaReady()) {
+                _message.value =
+                    "Generate the certificate, install it, then confirm it's installed before starting."
+                return@launch
+            }
+            val current = settings.current()
+            torConflict.runOrPrompt(
+                blocked = current.tor.routeAllDevice,
+                messageRes = R.string.tor_conflict_mitm,
+                stopDaemon = false
+            ) { applyStandaloneRunning() }
         }
+    }
+
+    private suspend fun applyStandaloneRunning() {
+        val current = settings.current()
+        // Standalone path: never use VPN capture for this toggle.
+        if (current.mitm.captureAllApps &&
+            vpn.connectionState.value.status == ConnectionStatus.CONNECTED
+        ) {
+            vpn.disconnect()
+        }
+        settings.update {
+            it.copy(mitm = it.mitm.copy(enabled = true, captureAllApps = false))
+        }
+        if (!proxy.running.value) proxy.start()
     }
 
     /**
@@ -314,18 +347,26 @@ class MitmDomainFrontingViewModel @Inject constructor(
      */
     fun startStop() {
         viewModelScope.launch {
-            val cfg = settings.current().mitm
+            val current = settings.current()
+            val cfg = current.mitm
             if (!isCaReady() && !connected.value) {
                 _message.value =
                     "Generate the certificate, install it, then confirm it's installed before starting."
                 return@launch
             }
             if (cfg.captureAllApps) {
-                if (proxy.running.value) proxy.stop()
-                if (!cfg.enabled) {
-                    settings.update { it.copy(mitm = it.mitm.copy(enabled = true)) }
+                val starting = !connected.value
+                torConflict.runOrPrompt(
+                    blocked = starting && (current.tor.enabled || current.tor.routeAllDevice),
+                    messageRes = R.string.tor_conflict_mitm,
+                    stopDaemon = true
+                ) {
+                    if (proxy.running.value) proxy.stop()
+                    if (!settings.current().mitm.enabled) {
+                        settings.update { it.copy(mitm = it.mitm.copy(enabled = true)) }
+                    }
+                    vpn.toggle()
                 }
-                vpn.toggle()
             } else {
                 setStandaloneRunning(!proxy.running.value)
             }

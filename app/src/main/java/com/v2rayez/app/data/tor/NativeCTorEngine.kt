@@ -37,6 +37,7 @@ class NativeCTorEngine @Inject constructor(
     private var process: Process? = null
     private var readerJob: Job? = null
     private val running = AtomicBoolean(false)
+    @Volatile private var lastDaemonLine: String = ""
 
     /** Downloaded `tor` pack first, then the bundled jniLibs PIE; null when neither exists. */
     private fun binary(context: Context): File? = addonPacks.resolveBinary(PackAvailability.TOR)
@@ -52,6 +53,7 @@ class NativeCTorEngine @Inject constructor(
         onStatus: (TorStatus) -> Unit
     ) = withContext(Dispatchers.IO) {
         stopInternal()
+        lastDaemonLine = ""
         val bin = binary(context)
         if (bin == null || !bin.exists()) {
             onStatus(TorStatus(TorState.ERROR, 0, "Tor binary not installed — download the Tor pack in Core manager", type))
@@ -92,6 +94,7 @@ class NativeCTorEngine @Inject constructor(
             proc.inputStream.bufferedReader().useLines { lines ->
                 for (line in lines) {
                     if (!running.get()) break
+                    if (line.isNotBlank()) lastDaemonLine = line.trim().take(240)
                     val match = BOOTSTRAP_REGEX.find(line) ?: continue
                     val pct = match.groupValues[1].toIntOrNull() ?: continue
                     val state = if (pct >= 100) TorState.CONNECTED else TorState.BOOTSTRAPPING
@@ -101,7 +104,13 @@ class NativeCTorEngine @Inject constructor(
         }
         if (running.get() && process == proc) {
             // Process exited unexpectedly before CONNECTED.
-            onStatus(TorStatus(TorState.ERROR, 0, "Tor process exited", type))
+            val exitCode = runCatching { proc.exitValue() }.getOrNull()
+            val detail = buildString {
+                append("Tor process exited")
+                if (exitCode != null) append(" (code $exitCode)")
+                if (lastDaemonLine.isNotBlank()) append(": $lastDaemonLine")
+            }
+            onStatus(TorStatus(TorState.ERROR, 0, detail, type))
             running.set(false)
         }
     }

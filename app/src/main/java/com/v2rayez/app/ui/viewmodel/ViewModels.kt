@@ -4,12 +4,15 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import com.v2rayez.app.R
 import com.v2rayez.app.data.mock.MockLogRepository
 import com.v2rayez.app.data.mock.MockServerRepository
 import com.v2rayez.app.data.mock.MockSettingsRepository
 import com.v2rayez.app.data.mock.MockStatsRepository
 import com.v2rayez.app.data.mock.MockVpnController
 import com.v2rayez.app.data.parser.CountryGuesser
+import com.v2rayez.app.data.repository.logRouting
+import com.v2rayez.app.data.tor.TorController
 import com.v2rayez.app.domain.model.ActivityItem
 import com.v2rayez.app.domain.model.AppSettings
 import com.v2rayez.app.domain.model.OnboardingWants
@@ -41,6 +44,8 @@ import com.v2rayez.app.domain.repository.SettingsRepository
 import com.v2rayez.app.domain.repository.StatsRepository
 import com.v2rayez.app.domain.repository.VpnController
 import com.v2rayez.app.ui.SupportedLanguages
+import com.v2rayez.app.ui.tor.TorConflictHandler
+import com.v2rayez.app.ui.tor.TorConflictUi
 import com.v2rayez.app.data.routing.RuleProviderFetcher
 import com.v2rayez.app.data.warp.WarpRegistrar
 import com.v2rayez.app.domain.model.StatsRange
@@ -71,14 +76,21 @@ class HomeViewModel @Inject constructor(
     private val vpn: VpnController,
     private val stats: StatsRepository,
     private val settings: SettingsRepository,
-    private val servers: ServerRepository
+    private val servers: ServerRepository,
+    private val torController: TorController? = null
 ) : ViewModel() {
     constructor() : this(
         MockVpnController(),
         MockStatsRepository(),
         MockSettingsRepository(),
-        MockServerRepository()
+        MockServerRepository(),
+        null
     )
+
+    private val torConflict = TorConflictHandler(settings, vpn, viewModelScope, torController)
+    val torConflictDialog: StateFlow<TorConflictUi?> = torConflict.dialog
+    fun confirmTorConflict() = torConflict.confirm()
+    fun dismissTorConflict() = torConflict.dismiss()
 
     val connectionState: StateFlow<ConnectionState> = vpn.connectionState
     val liveThroughput: StateFlow<List<ThroughputSample>> = vpn.liveThroughput
@@ -102,7 +114,7 @@ class HomeViewModel @Inject constructor(
             )
 
     /** Toggle connect/disconnect from the Home power button (legacy; prefer [connectAutoOrToggle]). */
-    fun toggleConnection() = vpn.toggle()
+    fun toggleConnection() = connectAutoOrToggle()
 
     /**
      * Home power button: disconnect if active; when Auto Mode is on and disconnected,
@@ -112,10 +124,32 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             when (vpn.connectionState.value.status) {
                 ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING -> vpn.disconnect()
-                ConnectionStatus.DISCONNECTED -> {
+                ConnectionStatus.DISCONNECTED -> gateTorThenConnect {
                     if (autoConnect.value) connectFastest() else vpn.toggle()
                 }
             }
+        }
+    }
+
+    private suspend fun gateTorThenConnect(action: suspend () -> Unit) {
+        val current = settings.current()
+        val tor = current.tor
+        when {
+            tor.enabled && current.domainFront.enabled ->
+                torConflict.runOrPrompt(
+                    blocked = true,
+                    messageRes = R.string.tor_conflict_domain_front,
+                    stopDaemon = true,
+                    action = action
+                )
+            tor.routeAllDevice ->
+                torConflict.runOrPrompt(
+                    blocked = true,
+                    messageRes = R.string.tor_conflict_vpn_connect,
+                    stopDaemon = false,
+                    action = action
+                )
+            else -> action()
         }
     }
 
@@ -292,9 +326,21 @@ class ServersViewModel @Inject constructor(
     private val repo: ServerRepository,
     private val vpn: VpnController,
     private val settings: SettingsRepository,
-    private val stats: StatsRepository
+    private val stats: StatsRepository,
+    private val torController: TorController? = null
 ) : ViewModel() {
-    constructor() : this(MockServerRepository(), MockVpnController(), MockSettingsRepository(), MockStatsRepository())
+    constructor() : this(
+        MockServerRepository(),
+        MockVpnController(),
+        MockSettingsRepository(),
+        MockStatsRepository(),
+        null
+    )
+
+    private val torConflict = TorConflictHandler(settings, vpn, viewModelScope, torController)
+    val torConflictDialog: StateFlow<TorConflictUi?> = torConflict.dialog
+    fun confirmTorConflict() = torConflict.confirm()
+    fun dismissTorConflict() = torConflict.dismiss()
 
     private val query = MutableStateFlow("")
     private val testing = MutableStateFlow<Set<String>>(emptySet())
@@ -362,7 +408,27 @@ class ServersViewModel @Inject constructor(
     fun setQuery(value: String) = query.update { value }
     fun setSortMode(mode: ServerSortMode) = sortMode.update { mode }
 
-    fun connect(server: Server) = vpn.connect(server)
+    fun connect(server: Server) {
+        viewModelScope.launch {
+            val current = settings.current()
+            val tor = current.tor
+            when {
+                tor.enabled && current.domainFront.enabled ->
+                    torConflict.runOrPrompt(
+                        blocked = true,
+                        messageRes = R.string.tor_conflict_domain_front,
+                        stopDaemon = true
+                    ) { vpn.connect(server) }
+                tor.routeAllDevice ->
+                    torConflict.runOrPrompt(
+                        blocked = true,
+                        messageRes = R.string.tor_conflict_vpn_connect,
+                        stopDaemon = false
+                    ) { vpn.connect(server) }
+                else -> vpn.connect(server)
+            }
+        }
+    }
 
     /** Pin (or clear) the default server used by the Home power button. */
     fun setDefaultServer(serverId: String?) = viewModelScope.launch {
@@ -507,7 +573,7 @@ class ServersViewModel @Inject constructor(
             val measured = pingServers(targets)
             val fastest = measured.filter { it.second > 0 }.minByOrNull { it.second }
             if (fastest != null) {
-                vpn.connect(fastest.first)
+                connect(fastest.first)
                 onResult("Connecting to ${fastest.first.name} (${fastest.second} ms)")
             } else {
                 onResult("No reachable server")
@@ -611,13 +677,32 @@ data class FreeServersUiState(
     /** id -> measured ping (ms); -1 = tested and unreachable. Untested ids are absent. */
     val pings: Map<String, Int> = emptyMap(),
     val testing: Set<String> = emptySet(),
-    /** (done, total) while a bulk test runs; null otherwise. */
-    val testProgress: Pair<Int, Int>? = null,
+    /** Progress and failures for the active bulk probe; null otherwise. */
+    val testProgress: FreeProbeProgress? = null,
+    /** Last actionable load/probe failure. Cleared when a new operation starts. */
+    val probeError: String? = null,
     val sortByPing: Boolean = false,
     val workingOnly: Boolean = false
 ) {
     val testedCount: Int get() = pings.size
     val workingCount: Int get() = pings.count { it.value > 0 }
+}
+
+enum class FreeProbeMode { QUICK, ALL, BEST_TEN }
+
+data class FreeProbeProgress(
+    val mode: FreeProbeMode,
+    val completed: Int,
+    val total: Int,
+    val failed: Int = 0
+)
+
+internal fun FreeProbeProgress.afterBatch(successes: Iterable<Boolean>): FreeProbeProgress {
+    val batch = successes.toList()
+    return copy(
+        completed = (completed + batch.size).coerceAtMost(total),
+        failed = failed + batch.count { !it }
+    )
 }
 
 @HiltViewModel
@@ -632,7 +717,8 @@ class FreeServersViewModel @Inject constructor(
     private val error = MutableStateFlow<String?>(null)
     private val pings = MutableStateFlow<Map<String, Int>>(emptyMap())
     private val testing = MutableStateFlow<Set<String>>(emptySet())
-    private val testProgress = MutableStateFlow<Pair<Int, Int>?>(null)
+    private val testProgress = MutableStateFlow<FreeProbeProgress?>(null)
+    private val probeError = MutableStateFlow<String?>(null)
     private val sortByPing = MutableStateFlow(false)
     private val workingOnly = MutableStateFlow(false)
 
@@ -653,12 +739,13 @@ class FreeServersViewModel @Inject constructor(
                     list.filter { key(it) in subKeys }.map { it.id }.toSet()
                 )
             },
-            combine(loading, error, testProgress) { l, e, p -> Triple(l, e, p) },
+            combine(loading, error, testProgress, probeError) { l, e, p, probeErr ->
+                LoadAndProbeState(l, e, p, probeErr)
+            },
             combine(pings, testing, sortByPing, workingOnly) { pg, t, sort, working ->
                 FreeFilters(pg, t, sort, working)
             }
         ) { (list, added, fromSub), loadState, filters ->
-            val (isLoading, err, progress) = loadState
             var display = list
             if (filters.workingOnly) display = display.filter { (filters.pings[it.id] ?: 0) > 0 }
             if (filters.sortByPing) {
@@ -666,13 +753,14 @@ class FreeServersViewModel @Inject constructor(
             }
             FreeServersUiState(
                 servers = display,
-                loading = isLoading,
-                error = err,
+                loading = loadState.loading,
+                error = loadState.error,
                 added = added,
                 addedFromSubscription = fromSub,
                 pings = filters.pings,
                 testing = filters.testing,
-                testProgress = progress,
+                testProgress = loadState.progress,
+                probeError = loadState.probeError,
                 sortByPing = filters.sortByPing,
                 workingOnly = filters.workingOnly
             )
@@ -685,6 +773,13 @@ class FreeServersViewModel @Inject constructor(
         val workingOnly: Boolean
     )
 
+    private data class LoadAndProbeState(
+        val loading: Boolean,
+        val error: String?,
+        val progress: FreeProbeProgress?,
+        val probeError: String?
+    )
+
     init { load() }
 
     fun load() {
@@ -692,6 +787,7 @@ class FreeServersViewModel @Inject constructor(
             cancelTests()
             loading.update { true }
             error.update { null }
+            probeError.update { null }
             val list = runCatching { repo.previewFromUrl(FREE_SUB_URL) }.getOrDefault(emptyList())
                 .let(::withStableDisplayNames)
             // Carry test results over for servers that survived the refresh (stable key).
@@ -718,7 +814,11 @@ class FreeServersViewModel @Inject constructor(
             testing.update { it + server.id }
             try {
                 val ping = try {
-                    vpn.testLatencyQuick(server).pingMs
+                    val result = vpn.testLatency(server)
+                    if (result.success) result.pingMs else {
+                        probeError.update { result.message.ifBlank { "Proxy handshake failed for ${server.name}" } }
+                        -1
+                    }
                 } catch (ce: kotlinx.coroutines.CancellationException) {
                     throw ce
                 } catch (_: Exception) {
@@ -740,46 +840,66 @@ class FreeServersViewModel @Inject constructor(
      * concurrency — a 6800-entry aggregator list can't be Xray-tested one by one, and
      * a sample is enough to surface working candidates for "Add fastest".
      */
-    fun quickScanSample(sample: Int = SCAN_SAMPLE) =
-        startBulkScan(pickScanSample(fetched.value, sample, pings.value.keys))
+    fun quickScanSample(sample: Int = SCAN_SAMPLE) {
+        startBulkScan(
+            targets = pickScanSample(fetched.value, sample, pings.value.keys),
+            mode = FreeProbeMode.QUICK
+        )
+    }
 
     /** Quick-scan every fetched server; cancellable and re-entrant. */
-    fun testAll() = startBulkScan(fetched.value)
+    fun testAll() {
+        startBulkScan(fetched.value, FreeProbeMode.ALL)
+    }
 
-    private fun startBulkScan(targets: List<Server>) {
+    private fun startBulkScan(
+        targets: List<Server>,
+        mode: FreeProbeMode
+    ): kotlinx.coroutines.Job {
         bulkTestJob?.cancel()
         bulkTestJob = null
         singleTestJobs.values.forEach { it.cancel() }
         singleTestJobs.clear()
         testing.update { emptySet() }
         testProgress.update { null }
+        probeError.update { null }
 
-        bulkTestJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             val myJob = coroutineContext[kotlinx.coroutines.Job]
             if (targets.isEmpty()) return@launch
-            val done = java.util.concurrent.atomic.AtomicInteger(0)
-            testProgress.update { 0 to targets.size }
+            var failed = 0
+            testProgress.update { FreeProbeProgress(mode, 0, targets.size) }
             testing.update { it + targets.map { s -> s.id } }
             try {
-                val gate = Semaphore(TEST_CONCURRENCY)
-                targets.map { server ->
-                    async {
-                        gate.withPermit {
-                            if (bulkTestJob !== myJob) return@withPermit
-                            val ping = try {
-                                vpn.testLatencyQuick(server).pingMs
+                // Keep only one bounded batch alive. Creating one coroutine per item in a
+                // 6k+ source list caused memory pressure and made "Test all" appear stalled.
+                targets.chunked(TEST_CONCURRENCY).forEach { batch ->
+                    val results = batch.map { server ->
+                        async {
+                            val result = try {
+                                vpn.testLatencyQuick(server)
                             } catch (ce: kotlinx.coroutines.CancellationException) {
                                 throw ce
-                            } catch (_: Exception) {
-                                -1
+                            } catch (e: Exception) {
+                                TestResult(server.id, -1, false, e.message ?: "TCP probe failed")
                             }
-                            if (bulkTestJob !== myJob) return@withPermit
-                            pings.update { it + (server.id to ping) }
-                            testing.update { it - server.id }
-                            testProgress.update { done.incrementAndGet() to targets.size }
+                            server to result
                         }
+                    }.awaitAll()
+                    if (bulkTestJob !== myJob) return@launch
+                    results.forEach { (server, result) ->
+                        pings.update { it + (server.id to (result.pingMs.takeIf { result.success } ?: -1)) }
+                        testing.update { it - server.id }
                     }
-                }.awaitAll()
+                    val progress = testProgress.value
+                        ?.afterBatch(results.map { it.second.success })
+                        ?: FreeProbeProgress(mode, results.size, targets.size)
+                    failed = progress.failed
+                    testProgress.update { progress }
+                }
+                if (failed > 0) {
+                    probeError.update { "$failed of ${targets.size} servers did not accept a TCP connection." }
+                }
             } finally {
                 if (bulkTestJob === myJob) {
                     testing.update { emptySet() }
@@ -787,6 +907,8 @@ class FreeServersViewModel @Inject constructor(
                 }
             }
         }
+        bulkTestJob = job
+        return job
     }
 
     /** Stop both Quick scan / Test all bulk jobs and any in-flight single-row accurate tests. */
@@ -831,11 +953,18 @@ class FreeServersViewModel @Inject constructor(
     /** Add the [n] fastest tested-working servers that aren't already in the list. */
     fun addFastest(n: Int = 10, onResult: (String) -> Unit = {}) {
         viewModelScope.launch {
+            if (rankByLatency(fetched.value, pings.value, n).size < n) {
+                startBulkScan(
+                    pickScanSample(fetched.value, SCAN_SAMPLE, pings.value.keys),
+                    FreeProbeMode.BEST_TEN
+                ).join()
+            }
             val st = state.value
-            val candidates = fetched.value
-                .filter { it.id !in st.added && (st.pings[it.id] ?: -1) > 0 }
-                .sortedBy { st.pings[it.id] }
-                .take(n)
+            val candidates = rankByLatency(
+                fetched.value.filter { it.id !in st.added },
+                pings.value,
+                n
+            )
             if (candidates.isEmpty()) {
                 onResult("No tested working servers yet — run a test first")
                 return@launch
@@ -886,6 +1015,16 @@ class FreeServersViewModel @Inject constructor(
                 s.copy(name = name, address = "${s.host}:${s.port}")
             }
         }
+
+        /** Reachable servers ordered by measured latency; untested/dead rows never qualify. */
+        internal fun rankByLatency(
+            servers: List<Server>,
+            measuredPings: Map<String, Int>,
+            limit: Int = 10
+        ): List<Server> = servers
+            .filter { (measuredPings[it.id] ?: -1) > 0 }
+            .sortedWith(compareBy<Server> { measuredPings.getValue(it.id) }.thenBy { it.id })
+            .take(limit.coerceAtLeast(0))
     }
 }
 
@@ -1206,15 +1345,30 @@ private fun filterLogs(logs: List<LogEntry>, query: String, levelFilter: LogLeve
             (query.isBlank() || e.message.contains(query, true) || (e.detail?.contains(query, true) == true))
     }
 
+private fun com.v2rayez.app.data.analytics.BugReportResult.statusToken(): String = when (this) {
+    is com.v2rayez.app.data.analytics.BugReportResult.Completed -> {
+        val sentryToken = when (sentry) {
+            is com.v2rayez.app.data.analytics.SentryBugReportStatus.Sent -> "sentry_ok"
+            com.v2rayez.app.data.analytics.SentryBugReportStatus.DsnMissing -> "sentry_dsn_missing"
+            is com.v2rayez.app.data.analytics.SentryBugReportStatus.Failed -> "sentry_failed"
+        }
+        "$sentryToken:${if (firebaseSent) "firebase_ok" else "firebase_failed"}"
+    }
+    is com.v2rayez.app.data.analytics.BugReportResult.Failed -> "report_failed"
+}
+
 @HiltViewModel
 class LogsViewModel @Inject constructor(
-    private val repo: LogRepository
+    private val repo: LogRepository,
+    private val bugReports: com.v2rayez.app.data.analytics.BugReporter
 ) : ViewModel() {
-    constructor() : this(MockLogRepository())
+    constructor() : this(MockLogRepository(), com.v2rayez.app.data.analytics.MockBugReporter())
 
     private val query = MutableStateFlow("")
     private val level = MutableStateFlow<LogLevel?>(null)
     private val autoScroll = MutableStateFlow(true)
+    private val _reportStatus = MutableStateFlow<String?>(null)
+    val reportStatus: StateFlow<String?> = _reportStatus
 
     val state: StateFlow<LogsUiState> =
         combine(
@@ -1236,8 +1390,13 @@ class LogsViewModel @Inject constructor(
     fun setLevel(value: LogLevel?) = level.update { value }
     fun setAutoScroll(enabled: Boolean) = autoScroll.update { enabled }
     fun clear() = repo.clear()
+    fun clearReportStatus() { _reportStatus.value = null }
 
     suspend fun export(): java.io.File? = repo.exportToFile()
+
+    fun reportBug() = viewModelScope.launch {
+        _reportStatus.value = bugReports.send().statusToken()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1246,9 +1405,24 @@ class LogsViewModel @Inject constructor(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val repo: SettingsRepository,
-    private val vpn: VpnController
+    private val vpn: VpnController,
+    private val logs: LogRepository,
+    private val bugReports: com.v2rayez.app.data.analytics.BugReporter
 ) : ViewModel() {
-    constructor() : this(MockSettingsRepository(), MockVpnController())
+    constructor() : this(
+        MockSettingsRepository(),
+        MockVpnController(),
+        MockLogRepository(),
+        com.v2rayez.app.data.analytics.MockBugReporter()
+    )
+
+    private val _reportStatus = MutableStateFlow<String?>(null)
+    val reportStatus: StateFlow<String?> = _reportStatus
+    fun clearReportStatus() { _reportStatus.value = null }
+
+    fun reportBug() = viewModelScope.launch {
+        _reportStatus.value = bugReports.send().statusToken()
+    }
 
     /** False until the first DataStore emission so first-run gates do not flash. */
     private val _hydrated = MutableStateFlow(false)
@@ -1293,9 +1467,18 @@ class SettingsViewModel @Inject constructor(
     fun dismissPromo() = edit { it.copy(promoDismissed = true) }
 
     // --- Routing ---
-    fun setRoutingMode(m: RoutingMode) = edit { it.copy(routing = it.routing.copy(mode = m)) }
-    fun toggleBypassLan(v: Boolean) = edit { it.copy(routing = it.routing.copy(bypassLan = v)) }
-    fun toggleBypassMainland(v: Boolean) = edit { it.copy(routing = it.routing.copy(bypassMainland = v)) }
+    fun setRoutingMode(m: RoutingMode) = edit {
+        logs.logRouting(LogLevel.INFO, "Routing mode → ${m.name}")
+        it.copy(routing = it.routing.copy(mode = m))
+    }
+    fun toggleBypassLan(v: Boolean) = edit {
+        logs.logRouting(LogLevel.INFO, "Bypass LAN → $v")
+        it.copy(routing = it.routing.copy(bypassLan = v))
+    }
+    fun toggleBypassMainland(v: Boolean) = edit {
+        logs.logRouting(LogLevel.INFO, "Bypass mainland → $v")
+        it.copy(routing = it.routing.copy(bypassMainland = v))
+    }
     fun toggleBypassIran(v: Boolean) = edit {
         // Always latch the one-shot when the user touches the toggle (on or off) so auto-config
         // never fights an explicit choice after process restart.
@@ -1532,32 +1715,28 @@ class OnboardingViewModel @Inject constructor(
         repo.update { it.copy(termsAccepted = true) }
     }
 
+    /** Persist feature picks only — packs / settings apply on [completeOnboarding]. */
     fun setWants(wants: OnboardingWants, analytics: Boolean) = viewModelScope.launch {
-        val pending = buildList {
-            if (wants.tor) add("tor")
-            if (wants.processCores) {
-                add("sing-box")
-                add("mihomo")
-            }
-            if (wants.mitm) { /* MITM is bundled Kotlin — no pack */ }
-        }
         repo.update {
             it.copy(
                 onboardingWants = wants.copy(analytics = analytics),
-                analyticsConsent = analytics,
-                pendingAddonInstall = (it.pendingAddonInstall + pending).distinct()
+                analyticsConsent = analytics
             )
         }
     }
 
     fun completeOnboarding() = viewModelScope.launch {
+        val current = repo.current()
+        val wants = current.onboardingWants.copy(analytics = current.analyticsConsent)
+        val applied = com.v2rayez.app.data.core.OnboardingFeatureMapping.apply(current, wants)
         repo.update {
-            it.copy(
+            applied.copy(
                 termsAccepted = true,
                 onboardingComplete = true,
                 crashlyticsConsent = true
             )
         }
+        // PackInstallCoordinator.start() / Application observes pendingAddonInstall and drains.
     }
 }
 
@@ -1586,4 +1765,13 @@ class GeoStatusViewModel @Inject constructor(
         }
         _showIranGeoCta.value = show
     }
+}
+
+/** Surfaces the background pack-install banner driven by [PackInstallCoordinator]. */
+@HiltViewModel
+class PackDownloadBannerViewModel @Inject constructor(
+    private val packInstalls: com.v2rayez.app.data.core.PackInstallCoordinator
+) : ViewModel() {
+    val show: StateFlow<Boolean> = packInstalls.homeInstallBanner
+    fun dismiss() = packInstalls.dismissHomeBanner()
 }

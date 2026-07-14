@@ -23,6 +23,7 @@ import com.v2rayez.app.data.core.ProcessProxyCore
 import com.v2rayez.app.data.core.SingBoxConfigBuilder
 import com.v2rayez.app.data.core.V2RayCore
 import com.v2rayez.app.data.analytics.FailureCategory
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.analytics.RemoteTelemetry
 import com.v2rayez.app.data.cert.MitmCaStore
 import com.v2rayez.app.data.download.DownloadTransport
@@ -44,6 +45,7 @@ import com.v2rayez.app.domain.model.ProxyCoreType
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.ServerGroup
 import com.v2rayez.app.domain.model.torEffectiveSettings
+import com.v2rayez.app.data.repository.logCore
 import com.v2rayez.app.data.repository.logVpn
 import com.v2rayez.app.domain.repository.LogRepository
 import com.v2rayez.app.domain.repository.ServerRepository
@@ -113,6 +115,21 @@ internal fun tunnelDeathReason(snapshot: TunnelHealthSnapshot): String? = with(s
 internal fun torSupportsServerProtocol(protocol: Protocol): Boolean =
     protocol != Protocol.SSH && !protocol.usesStandaloneEngine()
 
+/**
+ * Pure readiness gate for protocols whose runtime is not provided by the bundled Xray AAR.
+ * [addonAvailable] is relevant to Psiphon/dnstt; [singBoxAvailable] is relevant to SSH.
+ * Keeping this pure makes the missing-pack and present-pack connect decisions unit-testable.
+ */
+internal fun protocolRuntimeAvailable(
+    protocol: Protocol,
+    singBoxAvailable: Boolean,
+    addonAvailable: Boolean
+): Boolean = when (protocol) {
+    Protocol.SSH -> singBoxAvailable
+    Protocol.PSIPHON, Protocol.DNSTUNNEL -> addonAvailable
+    else -> true
+}
+
 /** Stable peer address advertised to Android while Xray forwards port 53 to Tor DNSPort. */
 internal const val TOR_TUN_DNS_SERVER = "10.10.14.2"
 
@@ -170,6 +187,8 @@ class V2RayVpnService : VpnService() {
     @Inject lateinit var downloadTransport: DownloadTransport
     @Inject lateinit var geoAssets: GeoAssetManager
     @Inject lateinit var remoteTelemetry: RemoteTelemetry
+    @Inject lateinit var firebaseTelemetry: FirebaseTelemetry
+    @Inject lateinit var mitmProxyState: MitmProxyStateHolder
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val lifecycleMutex = Mutex()
@@ -204,8 +223,9 @@ class V2RayVpnService : VpnService() {
 
     private enum class ProbePolicy(val hardFailure: Boolean, val label: String) {
         ORDINARY(false, "ordinary"),
+        DOMAIN_FRONT(false, "domain-front"),
         TOR(true, "Tor"),
-        MITM(false, "MITM"),
+        MITM(true, "MITM"),
         STANDALONE(false, "standalone")
     }
 
@@ -244,8 +264,22 @@ class V2RayVpnService : VpnService() {
         lifecycleMutex.withLock { startTunnelLocked(requestedId, generation) }
 
     private suspend fun startTunnelLocked(requestedId: String?, generation: Int) {
+        val connectStartedNs = System.nanoTime()
+        fun phase(name: String) {
+            val elapsedMs = (System.nanoTime() - connectStartedNs) / 1_000_000
+            log(LogLevel.INFO, "Connect phase [$name] ${elapsedMs}ms")
+        }
         try {
             if (generation != connectGeneration.get()) return
+            if (mitmProxyState.running.value) {
+                val message = "Standalone MITM proxy is running. Stop it before starting a VPN tunnel."
+                log(LogLevel.ERROR, message)
+                runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.MITM, message) }
+                stateHolder.setError(message)
+                stopForegroundCompat()
+                stopSelf()
+                return
+            }
             val anyEngineRunning = core.isRunning || processCore.isRunning || hevTunBridge.isRunning ||
                 psiphonEngine.isRunning || dnsTunnelEngine.isRunning || domainFrontEngine.isRunning ||
                 byedpi.isRunning
@@ -269,6 +303,7 @@ class V2RayVpnService : VpnService() {
                 if (port in 1..65535) java.net.InetSocketAddress("127.0.0.1", port) else null
             }
             val settings = settingsRepository.current().torEffectiveSettings()
+            phase("settings")
             // Foreground service still requires a notification; honor the user's choice by using
             // the silent channel instead of a fully-alerting ongoing notification.
             notificationsEnabled = settings.notifications
@@ -293,6 +328,18 @@ class V2RayVpnService : VpnService() {
                 failAndStop(reason)
                 return
             }
+            ConfigBuilder.validateRouting(settings)?.let { reason ->
+                failAndStop(reason)
+                return
+            }
+            if (settings.tor.enabled && settings.domainFront.enabled) {
+                failAndStop(
+                    getString(R.string.vpn_error_tor_fronting_mutex),
+                    stopTor = true,
+                    category = FailureCategory.TOR
+                )
+                return
+            }
             if (settings.tor.enabled && !torSupportsServerProtocol(server.protocol)) {
                 log(LogLevel.WARNING, "Tor is unavailable for ${server.protocol.label}")
                 failAndStop(getString(R.string.vpn_error_tor_xray), category = FailureCategory.TOR)
@@ -303,7 +350,25 @@ class V2RayVpnService : VpnService() {
             postNotification(server, getString(R.string.vpn_notif_connecting), getString(R.string.vpn_notif_starting_server, server.name))
             log(LogLevel.INFO, "Connecting to ${server.name} (${server.protocol.label})")
 
-            core.onStatus = { _, msg -> if (msg.isNotBlank()) log(LogLevel.DEBUG, msg) }
+            installCoreStatusLogger()
+
+            // Fail before creating a TUN when the selected protocol has no runnable process.
+            // The engines repeat this check immediately before exec to cover a concurrent delete.
+            val singBoxAvailable = server.protocol != Protocol.SSH || hasRunnableSingBox(settings)
+            val addonAvailable = when (server.protocol) {
+                Protocol.PSIPHON -> psiphonEngine.isAvailable()
+                Protocol.DNSTUNNEL -> dnsTunnelEngine.isAvailable()
+                else -> true
+            }
+            if (!protocolRuntimeAvailable(server.protocol, singBoxAvailable, addonAvailable)) {
+                val message = if (server.protocol == Protocol.SSH) {
+                    getString(R.string.vpn_error_singbox_missing, server.protocol.label)
+                } else {
+                    getString(R.string.vpn_error_pack_missing, server.protocol.label)
+                }
+                failAndStop(message, needsCoreManager = true)
+                return
+            }
 
             val frontServer = server.frontProxyId
                 ?.takeIf { it != server.id }
@@ -331,7 +396,10 @@ class V2RayVpnService : VpnService() {
                         false
                     } == true
                     if (!ready) {
-                        failAndStop(getString(R.string.vpn_error_tor), stopTor = true, category = FailureCategory.TOR)
+                        val detail = torController.status.value.message
+                            .takeIf { it.isNotBlank() }
+                            ?: "Tor did not reach a usable exit"
+                        failAndStop(detail, stopTor = true, category = FailureCategory.TOR)
                         return
                     }
                     torController.vpnSessionActive = true
@@ -340,6 +408,7 @@ class V2RayVpnService : VpnService() {
                     torController.vpnSessionActive = true
                 }
                 activeTorRequired = true
+                phase("tor-ready")
             }
 
             currentCoroutineContext().ensureActive()
@@ -357,6 +426,7 @@ class V2RayVpnService : VpnService() {
                 return
             }
             tunInterface = tun
+            phase("tun")
 
             // Domain fronting / byedpi only apply when we will use in-process Xray.
             // Tor standalone tunnel requires Xray (process cores have no Tor-exit wiring).
@@ -368,10 +438,6 @@ class V2RayVpnService : VpnService() {
             var coreType = CoreResolver.resolve(server, settings)
             // WireGuard / SSH run on sing-box (WG endpoint / ssh outbound); Xray can only do WG.
             if (server.protocol.requiresSingBox()) {
-                if (server.protocol == Protocol.SSH && !hasRunnableSingBox(settings)) {
-                    failAndStop(getString(R.string.vpn_error_singbox_missing, server.protocol.label))
-                    return
-                }
                 // WireGuard: prefer sing-box, but fall through to the Xray wireguard outbound when
                 // no sing-box binary is installed (both are wired in the config builders).
                 coreType = if (server.protocol == Protocol.WIREGUARD && !hasRunnableSingBox(settings)) {
@@ -404,7 +470,11 @@ class V2RayVpnService : VpnService() {
 
             if (!useXrayAar) {
                 if (settings.domainFront.enabled) {
-                    log(LogLevel.WARNING, "Domain fronting is Xray-only; ignored for ${coreType.label}")
+                    failAndStop(
+                        "Domain fronting requires Xray; selected runtime is ${coreType.label}.",
+                        category = FailureCategory.VPN_CONNECT
+                    )
+                    return
                 }
                 if (settings.desync.enabled && settings.desync.mode != DesyncMode.NONE) {
                     log(LogLevel.WARNING, "ByeDPI desync is Xray-only; ignored for ${coreType.label}")
@@ -424,6 +494,12 @@ class V2RayVpnService : VpnService() {
                 if (generation != connectGeneration.get()) return
                 domainFrontEngine.setSocketProtector { socket ->
                     runCatching { protect(socket) }.getOrDefault(false)
+                }
+                domainFrontEngine.onLog = { line ->
+                    val failure = listOf(
+                        " ERROR ", " TRY_FAIL ", " BLOCKED ", " FAIL ", "SVR_ALERT"
+                    ).any(line::contains)
+                    log(if (failure) LogLevel.ERROR else LogLevel.DEBUG, "Domain fronting: $line")
                 }
                 val (frontConfig, resolveNote) = FrontAddressResolver.withResolvedFronts(
                     settings.domainFront,
@@ -469,7 +545,7 @@ class V2RayVpnService : VpnService() {
                 if (generation != connectGeneration.get()) return
                 byedpi.onLog = { msg -> log(LogLevel.DEBUG, msg) }
                 if (!byedpi.isAvailable(this)) {
-                    failAndStop(getString(R.string.vpn_error_desync_missing))
+                    failAndStop(getString(R.string.vpn_error_desync_missing), needsCoreManager = true)
                     return
                 }
                 desyncRunning = byedpi.start(this, settings.desync)
@@ -508,25 +584,53 @@ class V2RayVpnService : VpnService() {
             }
             val running = if (useXrayAar) started && core.isRunning else started
             if (!running) {
-                failAndStop(getString(R.string.vpn_error_core))
+                failAndStop(coreFailureMessage(getString(R.string.vpn_error_core)))
                 return
             }
+            phase("core-running")
+            if (domainFrontRunning &&
+                !probeTunnelConnectivity(useXrayAar = true, policy = ProbePolicy.DOMAIN_FRONT)
+            ) {
+                val detail = domainFrontEngine.lastError.ifBlank {
+                    "no successful TLS route through the front"
+                }
+                failAndStop(
+                    "Domain fronting connectivity check failed — $detail",
+                    category = FailureCategory.VPN_CONNECT
+                )
+                return
+            }
+            if (domainFrontRunning) phase("domain-front-probe")
             // Expose the Xray socks inbound so on-demand downloads can proxy through the tunnel
             // (127.0.0.1 reaches it whether it binds loopback or 0.0.0.0 for LAN sharing). Not a
             // full-device Tor session (that's handled in startTorDeviceTunnel).
             activeXraySocksPort = if (useXrayAar) settings.socksPort.takeIf { it in 1..65535 } ?: 0 else 0
 
             // Ordinary tunnels soft-fail public generate_204 probes: censorship commonly blocks
-            // the probe hosts even when the selected proxy is usable. Tor catch-all is the only
-            // hard gate because a live SOCKS listener without a working exit/DNS is a false positive.
-            val torStandalone = settings.tor.enabled && !(domainFrontRunning && settings.domainFront.enabled)
-            val probeOk = probeTunnelConnectivity(
-                useXrayAar = useXrayAar,
-                policy = if (torStandalone) ProbePolicy.TOR else ProbePolicy.ORDINARY
-            )
-            if (!probeOk) {
-                failAndStop(getString(R.string.vpn_error_no_internet))
+            // the probe hosts even when the selected proxy is usable. Feature pipelines that
+            // would otherwise advertise a dead local hop (domain front, Tor, MITM) hard-fail.
+            val torChained = settings.tor.enabled
+            if (torChained && !probeTunnelConnectivity(useXrayAar, ProbePolicy.TOR)) {
+                val detail = if (torChained) {
+                    "${getString(R.string.vpn_error_no_internet)} — Tor SOCKS/exit/DNS probe failed"
+                } else {
+                    getString(R.string.vpn_error_no_internet)
+                }
+                failAndStop(
+                    coreFailureMessage(detail),
+                    stopTor = settings.tor.enabled,
+                    category = if (settings.tor.enabled) FailureCategory.TOR else FailureCategory.VPN_CONNECT
+                )
                 return
+            }
+            if (torChained) phase("tor-chain-probe")
+
+            // Soft-probe ordinary tunnels before advertising CONNECTED (still soft-fail under
+            // censored generate_204). Tor chain already gated above; MITM/Tor-standalone have
+            // their own fail-closed probes.
+            if (!torChained && !domainFrontRunning) {
+                probeTunnelConnectivity(useXrayAar, ProbePolicy.ORDINARY)
+                phase("ordinary-probe")
             }
 
             sessionStartMs = System.currentTimeMillis()
@@ -536,6 +640,7 @@ class V2RayVpnService : VpnService() {
             postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s ↓  0 B/s ↑")
             val ver = if (useXrayAar) core.coreVersion() else processCore.version()
             log(LogLevel.INFO, "Connected via ${coreType.label}. Core $ver")
+            phase("connected")
             startStatsLoop(settings.batterySaver, generation)
             startDeathWatchdog(generation)
         } catch (ce: CancellationException) {
@@ -558,6 +663,10 @@ class V2RayVpnService : VpnService() {
      * deliberately skips the SNI Front Dialer, ByeDPI/desync and Tor (mutually exclusive).
      */
     private suspend fun startMitmTunnel(settings: AppSettings, generation: Int) {
+        val startedNs = System.nanoTime()
+        fun phase(name: String) {
+            log(LogLevel.INFO, "MITM phase [$name] ${(System.nanoTime() - startedNs) / 1_000_000}ms")
+        }
         notificationsEnabled = settings.notifications
         log(LogLevel.INFO, "MITM Domain Fronting session starting")
 
@@ -576,7 +685,7 @@ class V2RayVpnService : VpnService() {
         usingProcessCore = false
 
         // Capture-all is XOR with Tor whole-device.
-        if (settings.tor.enabled && settings.tor.routeAllDevice) {
+        if (settings.tor.enabled) {
             failAndStop(getString(R.string.mitm_mutex_tor), category = FailureCategory.MITM)
             return
         }
@@ -586,7 +695,7 @@ class V2RayVpnService : VpnService() {
         stateHolder.setConnecting(server)
         postNotification(server, getString(R.string.vpn_notif_connecting), server.name)
 
-        core.onStatus = { _, msg -> if (msg.isNotBlank()) log(LogLevel.DEBUG, msg) }
+        installCoreStatusLogger()
 
         // Force whole-device routing for this session (ignore per-app bypass lists).
         val tunnelSettings = settings.copy(fullDeviceTunnel = true)
@@ -599,6 +708,7 @@ class V2RayVpnService : VpnService() {
             return
         }
         tunInterface = tun
+        phase("tun")
 
         // MITM is mutually exclusive with the dialer / ByeDPI; Tor is skipped for this session.
         log(LogLevel.INFO, "Skipping SNI Front Dialer / ByeDPI (MITM capture-all / full-device)")
@@ -625,17 +735,31 @@ class V2RayVpnService : VpnService() {
             return
         }
         if (!started || !core.isRunning) {
-            failAndStop(getString(R.string.vpn_error_core), category = FailureCategory.MITM)
+            failAndStop(
+                coreFailureMessage(getString(R.string.vpn_error_core)),
+                category = FailureCategory.MITM
+            )
             return
         }
+        phase("core-running")
 
-        probeTunnelConnectivity(useXrayAar = true, policy = ProbePolicy.MITM)
+        if (!probeTunnelConnectivity(useXrayAar = true, policy = ProbePolicy.MITM)) {
+            failAndStop(
+                coreFailureMessage(
+                    "${getString(R.string.vpn_error_no_internet)} — MITM tunnel probe failed"
+                ),
+                category = FailureCategory.MITM
+            )
+            return
+        }
+        phase("probe")
 
         sessionStartMs = System.currentTimeMillis()
         stateHolder.setConnected(server)
         reflectAlwaysOnState()
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
         log(LogLevel.INFO, "Connected via MITM Domain Fronting. Core ${core.coreVersion()}")
+        phase("connected")
         startStatsLoop(settings.batterySaver, generation)
         startDeathWatchdog(generation)
     }
@@ -646,6 +770,10 @@ class V2RayVpnService : VpnService() {
      * semantics for this session.
      */
     private suspend fun startTorDeviceTunnel(settings: AppSettings, generation: Int) {
+        val startedNs = System.nanoTime()
+        fun phase(name: String) {
+            log(LogLevel.INFO, "Tor phase [$name] ${(System.nanoTime() - startedNs) / 1_000_000}ms")
+        }
         notificationsEnabled = settings.notifications
         log(LogLevel.INFO, "Tor full-device session starting")
 
@@ -666,11 +794,15 @@ class V2RayVpnService : VpnService() {
         stateHolder.setConnecting(server)
         postNotification(server, getString(R.string.vpn_notif_connecting), server.name)
 
-        core.onStatus = { _, msg -> if (msg.isNotBlank()) log(LogLevel.DEBUG, msg) }
+        installCoreStatusLogger()
 
         // DNS hardening is already shared by torEffectiveSettings(); this path additionally
         // ignores per-app selection because it is explicitly the whole-device Tor mode.
         val tunnelSettings = settings.torEffectiveSettings().copy(fullDeviceTunnel = true)
+        ConfigBuilder.validateRouting(tunnelSettings)?.let { reason ->
+            failAndStop(reason, stopTor = true, category = FailureCategory.TOR)
+            return
+        }
 
         currentCoroutineContext().ensureActive()
         if (generation != connectGeneration.get()) return
@@ -690,7 +822,10 @@ class V2RayVpnService : VpnService() {
                 false
             } == true
             if (!ready) {
-                failAndStop(getString(R.string.vpn_error_tor), stopTor = true, category = FailureCategory.TOR)
+                val detail = torController.status.value.message
+                    .takeIf { it.isNotBlank() }
+                    ?: "Tor did not reach a usable exit"
+                failAndStop(detail, stopTor = true, category = FailureCategory.TOR)
                 return
             }
             torController.vpnSessionActive = true
@@ -699,6 +834,7 @@ class V2RayVpnService : VpnService() {
             torController.vpnSessionActive = true
         }
         activeTorRequired = true
+        phase("tor-ready")
 
         currentCoroutineContext().ensureActive()
         if (generation != connectGeneration.get()) {
@@ -712,6 +848,7 @@ class V2RayVpnService : VpnService() {
             return
         }
         tunInterface = tun
+        phase("tun")
 
         currentCoroutineContext().ensureActive()
         if (generation != connectGeneration.get()) {
@@ -739,22 +876,35 @@ class V2RayVpnService : VpnService() {
             return
         }
         if (!started || !core.isRunning) {
-            failAndStop(getString(R.string.vpn_error_core), stopTor = true, category = FailureCategory.TOR)
+            failAndStop(
+                coreFailureMessage(getString(R.string.vpn_error_core)),
+                stopTor = true,
+                category = FailureCategory.TOR
+            )
             return
         }
+        phase("core-running")
         // Xray socks inbound (→ Tor catch-all) is a valid download proxy here too.
         activeXraySocksPort = tunnelSettings.socksPort.takeIf { it in 1..65535 } ?: 0
 
         if (!probeTunnelConnectivity(useXrayAar = true, policy = ProbePolicy.TOR)) {
-            failAndStop(getString(R.string.vpn_error_no_internet), stopTor = true, category = FailureCategory.TOR)
+            failAndStop(
+                coreFailureMessage(
+                    "${getString(R.string.vpn_error_no_internet)} — Tor SOCKS/exit/DNS probe failed"
+                ),
+                stopTor = true,
+                category = FailureCategory.TOR
+            )
             return
         }
+        phase("probe")
 
         sessionStartMs = System.currentTimeMillis()
         stateHolder.setConnected(server)
         reflectAlwaysOnState()
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
         log(LogLevel.INFO, "Connected via Tor full-device. Core ${core.coreVersion()}")
+        phase("connected")
         startStatsLoop(settings.batterySaver, generation)
         startDeathWatchdog(generation)
     }
@@ -863,7 +1013,7 @@ class V2RayVpnService : VpnService() {
                 engineLabel = server.protocol.label
                 psiphonEngine.onLog = { msg -> log(LogLevel.DEBUG, msg) }
                 if (!psiphonEngine.isAvailable()) {
-                    failAndStop(getString(R.string.vpn_error_pack_missing, engineLabel))
+                    failAndStop(getString(R.string.vpn_error_pack_missing, engineLabel), needsCoreManager = true)
                     return
                 }
                 started = psiphonEngine.start(server, port)
@@ -873,7 +1023,7 @@ class V2RayVpnService : VpnService() {
                 engineLabel = server.protocol.label
                 dnsTunnelEngine.onLog = { msg -> log(LogLevel.DEBUG, msg) }
                 if (!dnsTunnelEngine.isAvailable()) {
-                    failAndStop(getString(R.string.vpn_error_pack_missing, engineLabel))
+                    failAndStop(getString(R.string.vpn_error_pack_missing, engineLabel), needsCoreManager = true)
                     return
                 }
                 started = dnsTunnelEngine.start(server, port)
@@ -955,18 +1105,30 @@ class V2RayVpnService : VpnService() {
         stateHolder.setDisconnected()
     }
 
-    /** Clean up any partial tunnel state, surface [message] to the UI, and stop the service safely. */
+    /**
+     * Clean up any partial tunnel state, surface [message] to the UI, and stop the service safely.
+     * [needsCoreManager] flags a missing on-demand pack/core (sing-box, Psiphon, DNS tunnel,
+     * ByeDPI, …) so Home can render an "Open Core manager" CTA independent of the (possibly
+     * localized) message text.
+     */
     private fun failAndStop(
         message: String,
         stopTor: Boolean = false,
-        category: FailureCategory = FailureCategory.VPN_CONNECT
+        category: FailureCategory = FailureCategory.VPN_CONNECT,
+        needsCoreManager: Boolean = false
     ) {
         log(LogLevel.ERROR, message)
         runCatching { remoteTelemetry.captureVpnFailure(category, message) }
+        runCatching {
+            firebaseTelemetry.recordNonFatal(
+                category.tag,
+                IllegalStateException("[${category.tag}] $message")
+            )
+        }
         // A watchdog failure can happen after a long valid session. Persist its final counters
         // before setError() resets the state-holder totals.
         runCatching { runBlocking { recordSession() } }
-        stateHolder.setError(message)
+        stateHolder.setError(message, needsCoreManager = needsCoreManager)
         statsJob?.cancel()
         statsJob = null
         pingJob?.cancel()
@@ -1105,12 +1267,37 @@ class V2RayVpnService : VpnService() {
                     ?: "Per-app policy degraded to full-device (except self)"
             )
         }
-        com.v2rayez.app.data.vpn.PerAppTunnelPolicy.applyToBuilder(
+        val failures = com.v2rayez.app.data.vpn.PerAppTunnelPolicy.applyToBuilder(
             addDisallowed = { pkg -> builder.addDisallowedApplication(pkg) },
             addAllowed = { pkg -> builder.addAllowedApplication(pkg) },
             decision = decision
         )
+        if (failures.isNotEmpty()) {
+            val detail = failures.sorted().joinToString(", ")
+            throw IllegalStateException(
+                "Per-app routing could not apply package list: $detail. " +
+                    "Refresh the app list or remove unavailable apps, then reconnect."
+            )
+        }
     }
+
+    private fun installCoreStatusLogger() {
+        core.onStatus = { code, message ->
+            if (message.isNotBlank()) {
+                val lower = message.lowercase()
+                val failure = code != 0L || listOf(
+                    "error", "failed", "failure", "invalid", "cannot", "unable", "panic", "fatal"
+                ).any(lower::contains)
+                val level = if (failure) LogLevel.ERROR else LogLevel.DEBUG
+                val text = "Xray status $code: $message"
+                logRepository.logCore(level, text)
+                remoteTelemetry.addLogBreadcrumb("core", level, text)
+            }
+        }
+    }
+
+    private fun coreFailureMessage(fallback: String): String =
+        core.lastStartError()?.takeIf { it.isNotBlank() }?.let { "$fallback — $it" } ?: fallback
 
     private fun startStatsLoop(batterySaver: Boolean, generation: Int) {
         statsJob?.cancel()
@@ -1343,7 +1530,9 @@ class V2RayVpnService : VpnService() {
                 runCatching { torController.stop() }
             }
         }
-        stopCoresBlocking()
+        // The standalone MITM service owns the shared Xray instance. A rejected VPN start must
+        // not tear that healthy proxy down from this service's onDestroy().
+        if (!mitmProxyState.running.value) stopCoresBlocking()
         usingProcessCore = false
         activeXraySocksPort = 0
         clearActiveRequirements()
@@ -1432,5 +1621,6 @@ class V2RayVpnService : VpnService() {
 
     private fun log(level: LogLevel, message: String) {
         logRepository.logVpn(level, message)
+        remoteTelemetry.addLogBreadcrumb("vpn", level, message)
     }
 }

@@ -7,6 +7,8 @@ import com.v2rayez.app.data.local.ServerDao
 import com.v2rayez.app.data.local.SessionDao
 import com.v2rayez.app.data.local.SubscriptionDao
 import com.v2rayez.app.data.local.V2RayDatabase
+import com.v2rayez.app.data.analytics.BugReportSender
+import com.v2rayez.app.data.analytics.BugReporter
 import com.v2rayez.app.data.repository.DataStoreSettingsRepository
 import com.v2rayez.app.data.repository.RealLogRepository
 import com.v2rayez.app.data.repository.RealMitmProxyController
@@ -65,4 +67,5 @@ abstract class RepositoryModule {
     @Binds @Singleton abstract fun bindStatsRepository(impl: RealStatsRepository): StatsRepository
     @Binds @Singleton abstract fun bindLogRepository(impl: RealLogRepository): LogRepository
     @Binds @Singleton abstract fun bindSettingsRepository(impl: DataStoreSettingsRepository): SettingsRepository
+    @Binds @Singleton abstract fun bindBugReporter(impl: BugReportSender): BugReporter
 }

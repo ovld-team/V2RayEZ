@@ -66,6 +66,7 @@ import com.v2rayez.app.ui.components.SectionHeader
 import com.v2rayez.app.ui.components.SettingRow
 import com.v2rayez.app.ui.components.SettingSwitchRow
 import com.v2rayez.app.ui.components.StatTile
+import com.v2rayez.app.ui.components.TorConflictDialog
 import com.v2rayez.app.ui.components.TrafficBarChart
 import com.v2rayez.app.ui.components.VSpacer
 import com.v2rayez.app.ui.components.V2TopBar
@@ -96,7 +97,14 @@ fun HomeScreen(
     val dailyTraffic by viewModel.dailyTraffic.collectAsState()
     val recentActivity by viewModel.recentActivity.collectAsState()
     val autoConnect by viewModel.autoConnect.collectAsState()
+    val torConflict by viewModel.torConflictDialog.collectAsState()
     val vpnPermission = com.v2rayez.app.ui.LocalVpnPermission.current
+
+    TorConflictDialog(
+        state = torConflict,
+        onConfirm = viewModel::confirmTorConflict,
+        onDismiss = viewModel::dismissTorConflict
+    )
 
     Column(
         modifier = Modifier
@@ -117,12 +125,14 @@ fun HomeScreen(
             VSpacer(16)
 
             IranGeoCta(onOpenAssets = onOpenAssets)
+            PackDownloadBanner(onOpenAssets = onOpenAssets)
 
             val status = connectionState.status
             ConnectionStatusCard(
                 status = status,
                 server = connectionState.server,
                 errorMessage = connectionState.errorMessage,
+                needsCoreManager = connectionState.needsCoreManager,
                 onOpenCoreManager = onOpenAssets,
                 onToggle = {
                     if (status == ConnectionStatus.DISCONNECTED) {
@@ -219,6 +229,78 @@ fun HomeScreen(
                 }
             }
             VSpacer(24)
+        }
+    }
+}
+
+/**
+ * Shown when wizard/cold-start background pack installs are actively queued.
+ * Skipped in @Preview (no Hilt graph).
+ */
+@Composable
+private fun PackDownloadBanner(onOpenAssets: () -> Unit) {
+    if (androidx.compose.ui.platform.LocalInspectionMode.current) return
+    val vm: com.v2rayez.app.ui.viewmodel.PackDownloadBannerViewModel = hiltViewModel()
+    val show by vm.show.collectAsState()
+    if (!show) return
+    CardSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f), Color.Transparent)
+                    )
+                )
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.Storage,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+                HSpacer(12)
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.home_pack_download_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    VSpacer(4)
+                    Text(
+                        stringResource(R.string.home_pack_download_sub),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            VSpacer(8)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                TextButton(onClick = vm::dismiss) {
+                    Text(stringResource(R.string.home_pack_download_dismiss))
+                }
+                TextButton(onClick = onOpenAssets) {
+                    Text(stringResource(R.string.home_pack_download_open))
+                }
+            }
         }
     }
 }
@@ -323,11 +405,14 @@ private fun ConnectionStatusCard(
     status: ConnectionStatus,
     server: Server?,
     errorMessage: String?,
+    needsCoreManager: Boolean = false,
     onToggle: () -> Unit,
     onOpenCoreManager: () -> Unit = {}
 ) {
     val hasError = status == ConnectionStatus.DISCONNECTED && errorMessage != null
-    val needsCore = hasError && errorMessage.orEmpty().contains("sing-box", ignoreCase = true)
+    // Structured flag from the service (not a locale-fragile string match) — true for any
+    // missing on-demand pack/core: sing-box (SSH/WireGuard), Psiphon, DNS tunnel, ByeDPI.
+    val needsCore = hasError && needsCoreManager
     val (accent, title) = when {
         hasError -> ErrorRed to stringResource(R.string.home_connection_failed)
         status == ConnectionStatus.CONNECTED -> Connected to stringResource(R.string.home_connected)

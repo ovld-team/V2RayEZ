@@ -40,6 +40,7 @@ import com.v2rayez.app.ui.components.PrimaryButton
 import com.v2rayez.app.ui.components.ReconnectBanner
 import com.v2rayez.app.ui.components.SectionHeader
 import com.v2rayez.app.ui.components.SettingSwitchRow
+import com.v2rayez.app.ui.components.TorConflictDialog
 import com.v2rayez.app.ui.components.V2BackTopBar
 import com.v2rayez.app.ui.components.V2FilterChip
 import com.v2rayez.app.ui.components.VSpacer
@@ -56,10 +57,17 @@ fun DomainFrontingScreen(
     val s by viewModel.state.collectAsState()
     val connected by viewModel.connected.collectAsState()
     val engineStatus by viewModel.engineStatus.collectAsState()
+    val torConflict by viewModel.torConflictDialog.collectAsState()
     val front = s.domainFront
     val mode = front.tuningMode.lowercase()
     // Local draft for fake SNI so the field shows raw value, not effectiveFakeSni fallback.
     var fakeSniDraft by remember(front.fakeSni) { mutableStateOf(front.fakeSni) }
+
+    TorConflictDialog(
+        state = torConflict,
+        onConfirm = viewModel::confirmTorConflict,
+        onDismiss = viewModel::dismissTorConflict
+    )
 
     Column(
         modifier = Modifier

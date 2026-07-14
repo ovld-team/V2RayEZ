@@ -1,5 +1,11 @@
 package com.v2rayez.app.ui.screens.servers
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -35,12 +41,16 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -117,7 +127,11 @@ fun FreeServersScreen(
                     val progress = state.testProgress
                     V2FilterChip(
                         label = if (progress != null) {
-                            stringResource(R.string.free_scanning_progress, progress.first, progress.second)
+                            stringResource(
+                                R.string.free_scanning_progress,
+                                progress.completed,
+                                progress.total
+                            )
                         } else {
                             stringResource(R.string.free_quick_scan)
                         },
@@ -145,13 +159,19 @@ fun FreeServersScreen(
                         viewModel.toggleWorkingOnly()
                     }
                 }
-                state.testProgress?.let { (done, total) ->
+                state.testProgress?.let { progress ->
                     VSpacer(8)
                     // Explicit stop affordance for the in-progress bulk scan (the chip toggle
                     // alone was too hidden — users reported "no stop button").
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         LinearProgressIndicator(
-                            progress = { if (total > 0) done.toFloat() / total else 0f },
+                            progress = {
+                                if (progress.total > 0) {
+                                    progress.completed.toFloat() / progress.total
+                                } else {
+                                    0f
+                                }
+                            },
                             modifier = Modifier.weight(1f)
                         )
                         HSpacer(10)
@@ -163,6 +183,14 @@ fun FreeServersScreen(
                             onClick = viewModel::cancelTests
                         )
                     }
+                }
+                state.probeError?.let { message ->
+                    VSpacer(6)
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ErrorRed
+                    )
                 }
                 VSpacer(8)
             }
@@ -215,7 +243,27 @@ private fun FreeServerRow(
     onTest: () -> Unit,
     onAdd: () -> Unit
 ) {
-    CardSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    // Subtle breathing alpha while a probe is in flight — a second, ambient cue for
+    // "this row is busy" beyond the small spinner, so users glancing at the list still
+    // notice progress rather than mistaking it for a frozen screen.
+    val rowAlpha by if (isTesting) {
+        val transition = rememberInfiniteTransition(label = "freeServerTestingPulse")
+        transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.72f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 650, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "freeServerTestingPulseAlpha"
+        )
+    } else {
+        remember { mutableFloatStateOf(1f) }
+    }
+    CardSurface(
+        Modifier.fillMaxWidth().graphicsLayer(alpha = rowAlpha),
+        shape = RoundedCornerShape(16.dp)
+    ) {
         Row(
             modifier = Modifier
                 .defaultMinSize(minHeight = 64.dp)
@@ -276,10 +324,13 @@ private fun FreeServerRow(
 @Composable
 private fun PingBadge(pingMs: Int?, testing: Boolean) {
     when {
+        // Sized up from 16.dp and given a visible track ring so the sweeping arc reads
+        // clearly as motion instead of shrinking to a barely-there dot at small scale.
         testing -> CircularProgressIndicator(
-            modifier = Modifier.size(16.dp),
-            strokeWidth = 2.dp,
-            color = MaterialTheme.colorScheme.primary
+            modifier = Modifier.size(22.dp),
+            strokeWidth = 2.5.dp,
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
         )
         pingMs == null -> Unit
         pingMs > 0 -> BadgeText("$pingMs ms", Connected)
@@ -312,18 +363,33 @@ private fun RoundIconButton(
     enabled: Boolean,
     onClick: () -> Unit
 ) {
+    // Busy state (icon == null) previously drew a `tint`-colored spinner over a
+    // `tint`-at-16%-alpha backdrop — same hue on same hue reads as a flat, static
+    // grey-ish blob at small sizes instead of an obvious animated spinner. Swap the
+    // backdrop to a neutral surface while busy so the accent-colored arc stands out.
+    val isBusy = icon == null
+    val backdrop = if (isBusy) {
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f)
+    } else {
+        tint.copy(alpha = 0.16f)
+    }
     Box(
         modifier = Modifier
             .size(36.dp)
             .clip(CircleShape)
-            .background(tint.copy(alpha = 0.16f))
+            .background(backdrop)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         if (icon != null) {
             Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(20.dp))
         } else {
-            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = tint)
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp).semantics { this.contentDescription = contentDescription },
+                strokeWidth = 2.5.dp,
+                color = tint,
+                trackColor = tint.copy(alpha = 0.3f)
+            )
         }
     }
 }

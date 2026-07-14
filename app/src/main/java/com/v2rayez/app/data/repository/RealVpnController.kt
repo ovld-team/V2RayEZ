@@ -13,10 +13,12 @@ import com.v2rayez.app.data.service.VpnStateHolder
 import com.v2rayez.app.domain.model.ActivityItem
 import com.v2rayez.app.domain.model.ConnectionState
 import com.v2rayez.app.domain.model.ConnectionStatus
+import com.v2rayez.app.domain.model.LogLevel
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.TestResult
 import com.v2rayez.app.domain.model.ThroughputSample
 import com.v2rayez.app.domain.model.TrafficPoint
+import com.v2rayez.app.domain.repository.LogRepository
 import com.v2rayez.app.domain.repository.ServerRepository
 import com.v2rayez.app.domain.repository.SettingsRepository
 import com.v2rayez.app.domain.repository.VpnController
@@ -28,6 +30,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -40,7 +44,8 @@ class RealVpnController @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val serverRepository: ServerRepository,
     private val geoAssets: GeoAssetManager,
-    private val remoteTelemetry: RemoteTelemetry
+    private val remoteTelemetry: RemoteTelemetry,
+    private val logRepository: LogRepository
 ) : VpnController {
 
     override val connectionState: StateFlow<ConnectionState> = stateHolder.connectionState
@@ -91,6 +96,29 @@ class RealVpnController @Inject constructor(
         // false_positive_candidate tag (see RemoteTelemetry) instead of alerting on every one.
         if (!result.success && result.message == "Timed out") {
             runCatching { remoteTelemetry.captureFreeTestTimeout(server.id) }
+            runCatching {
+                logRepository.logFree(
+                    LogLevel.WARNING,
+                    "Free-server test timed out",
+                    detail = "protocol=${server.protocol.name}"
+                )
+            }
+        } else if (result.success) {
+            runCatching {
+                logRepository.logFree(
+                    LogLevel.INFO,
+                    "Free-server test ok (${result.pingMs}ms)",
+                    detail = "protocol=${server.protocol.name}"
+                )
+            }
+        } else {
+            runCatching {
+                logRepository.logFree(
+                    LogLevel.WARNING,
+                    "Free-server test failed: ${result.message ?: "unknown"}",
+                    detail = "protocol=${server.protocol.name}"
+                )
+            }
         }
         result
     }
@@ -156,19 +184,33 @@ class RealVpnController @Inject constructor(
 
     private fun tcpConnectMs(host: String, port: Int, timeoutMs: Int = 5_000): Long {
         if (host.isBlank() || port !in 1..65535) return -1L
-        val start = System.currentTimeMillis()
-        return runCatching {
-            Socket().use { s ->
-                s.connect(InetSocketAddress(host, port), timeoutMs)
-                (System.currentTimeMillis() - start).coerceAtLeast(1L)
-            }
-        }.getOrDefault(-1L)
+        // Socket.connect's timeout does not include a potentially stuck hostname lookup.
+        // Bound the whole resolve+connect operation so bulk scans always advance.
+        val future = TCP_PROBE_EXECUTOR.submit<Long> {
+            val start = System.nanoTime()
+            runCatching {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress(host, port), timeoutMs)
+                    ((System.nanoTime() - start) / 1_000_000).coerceAtLeast(1L)
+                }
+            }.getOrDefault(-1L)
+        }
+        return try {
+            future.get((timeoutMs + DNS_GRACE_MS).toLong(), TimeUnit.MILLISECONDS)
+        } catch (_: Exception) {
+            future.cancel(true)
+            -1L
+        }
     }
 
     companion object {
         private const val QUICK_TCP_TIMEOUT_MS = 1_500
         /** Hard ceiling for accurate (Xray + TCP) free/server probes — stalls must surface as Timed out. */
         private const val ACCURATE_TIMEOUT_MS = 10_000L
+        private const val DNS_GRACE_MS = 500
+        private val TCP_PROBE_EXECUTOR = Executors.newFixedThreadPool(32) { runnable ->
+            Thread(runnable, "free-server-tcp-probe").apply { isDaemon = true }
+        }
 
         internal fun tcpResult(serverId: String, tcpMs: Long, failureMessage: String): TestResult =
             if (tcpMs > 0) {

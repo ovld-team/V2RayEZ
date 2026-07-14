@@ -79,6 +79,37 @@ object ConfigBuilder {
         else -> null
     }
 
+    /** Reject user rules Xray cannot parse instead of failing later with a generic core error. */
+    fun validateRouting(settings: AppSettings): String? {
+        settings.routing.rules.filter { it.enabled }.forEachIndexed { index, rule ->
+            val label = rule.remark.ifBlank { "Routing rule ${index + 1}" }
+            if (rule.domains.isEmpty() && rule.ips.isEmpty() &&
+                rule.port.isBlank() && rule.protocol.isEmpty()
+            ) {
+                return "$label has no matcher — add a domain, IP, port, or protocol."
+            }
+            if (rule.port.isNotBlank() && !isValidPortList(rule.port)) {
+                return "$label has an invalid port expression: ${rule.port}"
+            }
+        }
+        return null
+    }
+
+    private fun isValidPortList(value: String): Boolean =
+        value.split(',').all { token ->
+            val parts = token.trim().split('-')
+            when (parts.size) {
+                1 -> parts[0].toIntOrNull() in 1..65535
+                2 -> {
+                    val first = parts[0].toIntOrNull()
+                    val last = parts[1].toIntOrNull()
+                    first != null && last != null && first in 1..65535 &&
+                        last in 1..65535 && first <= last
+                }
+                else -> false
+            }
+        }
+
     private fun isValidRealityPublicKey(value: String): Boolean {
         val cleaned = value.trim().replace('-', '+').replace('_', '/')
         val padded = cleaned.padEnd((cleaned.length + 3) / 4 * 4, '=')
@@ -196,11 +227,21 @@ object ConfigBuilder {
 
     private fun dnsBlock(settings: AppSettings, geositeAvailable: Boolean): JsonObject = buildJsonObject {
         putJsonArray("servers") {
-            // FakeDNS first so sniffing-enabled connections resolve to the fake pool and
-            // routing/SNI can be applied by domain.
-            if (settings.dns.enableFakeDns) add("fakedns")
-            // Prefer plain IP/UDP resolvers so DNS does not depend on a live proxy+DoH path.
-            add(normalizeDnsServer(settings.dns.remoteDns.ifBlank { "1.1.1.1" }))
+            if (settings.tor.enabled) {
+                // Xray's string DNS form is an address, not a host:port endpoint on all bundled
+                // core versions. Emit the explicit object form so queries really reach Tor's
+                // loopback DNSPort instead of treating "127.0.0.1:9053" as a resolver name.
+                addJsonObject {
+                    put("address", "127.0.0.1")
+                    put("port", settings.tor.dnsPort.coerceIn(1, 65535))
+                }
+            } else {
+                // FakeDNS first so sniffing-enabled connections resolve to the fake pool and
+                // routing/SNI can be applied by domain.
+                if (settings.dns.enableFakeDns) add("fakedns")
+                // Prefer plain IP/UDP resolvers so DNS does not depend on a live proxy+DoH path.
+                add(normalizeDnsServer(settings.dns.remoteDns.ifBlank { "1.1.1.1" }))
+            }
             // The domestic split needs geosite:cn to scope which domains it answers —
             // without geosite.dat the whole entry is skipped (remote DNS handles everything).
             if (settings.dns.domesticDns.isNotBlank() && geositeAvailable) {
@@ -294,7 +335,8 @@ object ConfigBuilder {
         domainFrontRunning: Boolean
     ): JsonArray = buildJsonArray {
         val fronting = domainFrontRunning && settings.domainFront.enabled
-        // Standalone Tor owns catch-all; fronting owns clearnet dial — skip WARP in both cases.
+        // Full-device Tor owns catch-all; a selected server is chained over Tor. Fronting is
+        // rejected by V2RayVpnService because its protected local dialer bypasses Tor.
         val warp = settings.warp.takeIf {
             it.enabled && it.configured && !settings.tor.enabled && !fronting
         }
@@ -321,6 +363,7 @@ object ConfigBuilder {
             // the local domain-front dialer, or the raw desync/fragment dialer.
             val mainDialer = when {
                 fronting -> null
+                settings.tor.enabled && !settings.tor.routeAllDevice -> TAG_TOR
                 warp != null && warp.mode == WarpMode.FRONT -> TAG_WARP
                 frontServer != null -> TAG_PROXY2
                 else -> rawDialer
@@ -654,12 +697,11 @@ object ConfigBuilder {
      * Routing rules.
      *
      * Tor coexistence:
-     * - **Standalone** (`tor.enabled`, domain fronting not active): catch-all → `tor`
-     *   so Tor is the exit for all traffic.
-     * - **Beside domain fronting** (`tor.enabled` + front dialer running): keep the
-     *   fronted `proxy` path as the default; only `.onion` (and explicit TOR rules)
-     *   go through Tor. Previously Tor stole everything and the fronted outbound
-     *   was unused.
+     * - **Full-device** (`tor.routeAllDevice`): DNS and loopback first, QUIC blocked, then
+     *   TCP catch-all → `tor`; unsupported residual UDP is blocked instead of sent to Tor SOCKS.
+     * - **Selected server** (`tor.enabled` without route-all): routing defaults to `proxy`, whose
+     *   dialer is the Tor outbound. This preserves VLESS/VMESS/Trojan/SS instead of bypassing the
+     *   selected server with an early Tor catch-all.
      */
     private fun routing(
         settings: AppSettings,
@@ -667,9 +709,7 @@ object ConfigBuilder {
         geositeAvailable: Boolean
     ): JsonObject = buildJsonObject {
         val r = settings.routing
-        val fronting = domainFrontRunning && settings.domainFront.enabled
-        val torStandalone = settings.tor.enabled && !fronting
-        val torBesideFront = settings.tor.enabled && fronting
+        val torFullDevice = settings.tor.enabled && settings.tor.routeAllDevice
         put("domainStrategy", r.domainStrategy)
         putJsonArray("rules") {
             // DNS must win first-match over Tor catch-all: Tor SOCKS does not carry UDP DNS.
@@ -687,8 +727,8 @@ object ConfigBuilder {
                     putJsonArray("network") { add("udp") }
                 }
             }
-            // Standalone Tor: loopback (SOCKS/DNSPort) stays direct; everything else → Tor.
-            if (torStandalone) {
+            // Tor's local SOCKS and DNS listeners must never be captured by the VPN route.
+            if (settings.tor.enabled) {
                 addJsonObject {
                     put("type", "field")
                     put("outboundTag", TAG_DIRECT)
@@ -696,11 +736,6 @@ object ConfigBuilder {
                         add("127.0.0.1")
                         add("::1")
                     }
-                }
-                addJsonObject {
-                    put("type", "field")
-                    put("outboundTag", TAG_TOR)
-                    putJsonArray("network") { add("tcp"); add("udp") }
                 }
             }
             // Block ads (needs geosite.dat — silently unavailable until the geo pack is installed).
@@ -715,15 +750,18 @@ object ConfigBuilder {
                 put("outboundTag", TAG_BLOCK)
                 putJsonArray("protocol") { add("quic") }
             }
-            // Beside domain fronting: onion sites still need Tor; clearnet uses proxy.
-            if (torBesideFront) {
+            // Full-device Tor catch-all must come after DNS and QUIC. Tor SOCKS is TCP-only;
+            // sending UDP to it is a silent blackhole, while blocking QUIC makes HTTPS retry TCP.
+            if (torFullDevice) {
                 addJsonObject {
                     put("type", "field")
                     put("outboundTag", TAG_TOR)
-                    putJsonArray("domain") {
-                        add("regexp:.*\\.onion$")
-                        add("regexp:.*\\.onion\\.")
-                    }
+                    putJsonArray("network") { add("tcp") }
+                }
+                addJsonObject {
+                    put("type", "field")
+                    put("outboundTag", TAG_BLOCK)
+                    putJsonArray("network") { add("udp") }
                 }
             }
             if (r.mode == RoutingMode.RULE) {
@@ -769,6 +807,11 @@ object ConfigBuilder {
             // would leak all port-443 traffic). Any rule that loses a geo matcher is therefore
             // dropped in full — it falls back to default routing until the geo pack installs.
             r.rules.filter { it.enabled }.forEach { rule ->
+                // Defensive fallback for legacy/imported settings. New edits are rejected by
+                // validateRouting(), but an empty field rule must never reach Xray.
+                if (rule.domains.isEmpty() && rule.ips.isEmpty() &&
+                    rule.port.isBlank() && rule.protocol.isEmpty()
+                ) return@forEach
                 if (!geositeAvailable) {
                     val geoStripped = rule.domains.any { it.startsWith("geosite:", ignoreCase = true) } ||
                         rule.ips.any { !keepGeoipOffline(it) }

@@ -1,0 +1,27 @@
+{
+  "_instructions": "Set a direct HTTPS executable URL and its SHA-256 for each ABI that upstream publishes. Empty entries are intentional placeholders and are skipped. The release workflow renames downloads to the binaryName and scripts/pack-addons.sh creates the app-facing ZIP.",
+  "vendors": [
+    {
+      "packId": "psiphon",
+      "binaryName": "psiphon-tunnel-core",
+      "upstream": "https://github.com/Psiphon-Labs/psiphon-tunnel-core",
+      "sources": {
+        "arm64-v8a": { "url": "", "sha256": "" },
+        "armeabi-v7a": { "url": "", "sha256": "" },
+        "x86": { "url": "", "sha256": "" },
+        "x86_64": { "url": "", "sha256": "" }
+      }
+    },
+    {
+      "packId": "dnstunnel",
+      "binaryName": "dnstt",
+      "upstream": "https://www.bamsoftware.com/software/dnstt/",
+      "sources": {
+        "arm64-v8a": { "url": "", "sha256": "" },
+        "armeabi-v7a": { "url": "", "sha256": "" },
+        "x86": { "url": "", "sha256": "" },
+        "x86_64": { "url": "", "sha256": "" }
+      }
+    }
+  ]
+}

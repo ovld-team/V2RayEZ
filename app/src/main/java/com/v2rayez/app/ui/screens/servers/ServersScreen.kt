@@ -71,6 +71,7 @@ import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.ui.components.CardSurface
 import com.v2rayez.app.ui.components.PrimaryButton
 import com.v2rayez.app.ui.components.ServerListItem
+import com.v2rayez.app.ui.components.TorConflictDialog
 import com.v2rayez.app.ui.components.V2TopBar
 import com.v2rayez.app.ui.theme.Connected
 import com.v2rayez.app.ui.theme.ErrorRed
@@ -108,6 +109,12 @@ fun ServersScreen(
     val refreshing by viewModel.refreshing.collectAsState()
     val lastPingMessage by viewModel.lastPingMessage.collectAsState()
     val refreshError by viewModel.refreshError.collectAsState()
+    val torConflict by viewModel.torConflictDialog.collectAsState()
+    TorConflictDialog(
+        state = torConflict,
+        onConfirm = viewModel::confirmTorConflict,
+        onDismiss = viewModel::dismissTorConflict
+    )
     var connectTarget by remember { mutableStateOf<Server?>(null) }
     var menuTarget by remember { mutableStateOf<Server?>(null) }
     var qrTarget by remember { mutableStateOf<Server?>(null) }

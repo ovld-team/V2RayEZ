@@ -93,7 +93,8 @@ class AddonPackManagerTest {
                   },
                   {
                     "name": "tor-arm64-v8a.zip",
-                    "browser_download_url": "https://example.com/tor-arm64.zip"
+                    "browser_download_url": "https://example.com/tor-arm64.zip",
+                    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                   }
                 ]
               }
@@ -110,6 +111,7 @@ class AddonPackManagerTest {
         assertEquals("tor-arm64-v8a.zip", release?.assetName)
         assertEquals("https://example.com/tor-arm64.zip", release?.downloadUrl)
         assertEquals("arm64-v8a", release?.abi)
+        assertEquals("a".repeat(64), release?.sha256)
     }
 
     @Test

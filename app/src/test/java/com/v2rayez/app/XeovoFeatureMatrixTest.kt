@@ -85,10 +85,10 @@ class XeovoFeatureMatrixTest {
     // ── Named stacking scenarios ───────────────────────────────────────────
 
     @Test
-    fun torOnly_catchAllToTor_noWarpFragmentDesync() {
+    fun torFullDevice_tcpCatchAllToTor_noWarpFragmentDesync() {
         val s = sample()
         val settings = AppSettings(
-            tor = TorConfig(enabled = true, transport = TorTransport.OBFS4),
+            tor = TorConfig(enabled = true, transport = TorTransport.OBFS4, routeAllDevice = true),
             fragment = FragmentConfig(enabled = true),
             desync = DesyncConfig(enabled = true, mode = DesyncMode.SPLIT),
             warp = warpConfigured(enabled = true),
@@ -98,15 +98,15 @@ class XeovoFeatureMatrixTest {
         println("torOnly len=${json.length}")
         assertValidJson("torOnly", json)
         assertTrue(json.contains("\"tag\":\"tor\""))
-        assertTrue(json.contains("\"outboundTag\":\"tor\""))
-        assertTrue(json.contains("\"network\":[\"tcp\",\"udp\"]"))
+        assertTrue(json.contains("\"outboundTag\":\"tor\",\"network\":[\"tcp\"]"))
+        assertTrue(json.contains("\"outboundTag\":\"block\",\"network\":[\"udp\"]"))
         assertFalse("WARP must be off under tor standalone", json.contains("\"protocol\":\"wireguard\""))
         assertFalse("fragment must be off under tor standalone", json.contains("\"tag\":\"fragment\""))
         assertFalse("byedpi must be off under tor standalone", json.contains("\"tag\":\"byedpi\""))
     }
 
     @Test
-    fun torPlusDomainFront_onionOnlyTor_clearnetViaFront() {
+    fun torPlusDomainFront_builderDoesNotAddTorRoutingFallback() {
         val s = sample()
         val settings = AppSettings(
             tor = TorConfig(enabled = true),
@@ -120,8 +120,10 @@ class XeovoFeatureMatrixTest {
         assertValidJson("tor+front", json)
         assertTrue(json.contains("\"tag\":\"tor\""))
         assertTrue(json.contains("\"address\":\"127.0.0.1\""))
-        assertTrue(json.contains("regexp:.*\\\\.onion"))
-        assertFalse(json.contains("\"outboundTag\":\"tor\",\"network\":[\"tcp\",\"udp\"]"))
+        // V2RayVpnService rejects this mutually-exclusive combination before building a config.
+        // Keep the builder defensive too: do not create a partial onion/catch-all Tor route.
+        assertFalse(json.contains("regexp:.*\\\\.onion"))
+        assertFalse(json.contains("\"outboundTag\":\"tor\""))
         assertFalse("WARP off when fronting", json.contains("\"protocol\":\"wireguard\""))
         assertFalse("byedpi off when fronting", json.contains("\"dialerProxy\":\"byedpi\""))
         assertFalse("fragment off when fronting", json.contains("\"tag\":\"fragment\""))
@@ -185,7 +187,7 @@ class XeovoFeatureMatrixTest {
     }
 
     @Test
-    fun allFeaturesEnabled_frontingWinsDialer_torBesideOnion() {
+    fun allFeaturesEnabled_invalidTorFrontingHasNoTorRoute() {
         val s = sample()
         val settings = AppSettings(
             tor = TorConfig(enabled = true, transport = TorTransport.WEBTUNNEL, autoRotateBridges = true),
@@ -208,7 +210,7 @@ class XeovoFeatureMatrixTest {
         assertFalse(json.contains("\"protocol\":\"wireguard\""))
         assertFalse(json.contains("\"dialerProxy\":\"byedpi\""))
         assertFalse(json.contains("\"tag\":\"fragment\""))
-        assertFalse(json.contains("\"outboundTag\":\"tor\",\"network\":[\"tcp\",\"udp\"]"))
+        assertFalse(json.contains("\"outboundTag\":\"tor\""))
     }
 
     @Test
@@ -245,11 +247,12 @@ class XeovoFeatureMatrixTest {
                 when (name) {
                     "tor" -> {
                         assertTrue(json.contains("\"tag\":\"tor\""))
-                        assertTrue(json.contains("\"network\":[\"tcp\",\"udp\"]"))
+                        assertTrue(json.contains("\"dialerProxy\":\"tor\""))
+                        assertFalse(json.contains("\"outboundTag\":\"tor\""))
                     }
                     "tor+front" -> {
-                        assertTrue(json.contains("regexp:.*\\\\.onion"))
-                        assertFalse(json.contains("\"outboundTag\":\"tor\",\"network\":[\"tcp\",\"udp\"]"))
+                        assertFalse(json.contains("regexp:.*\\\\.onion"))
+                        assertFalse(json.contains("\"outboundTag\":\"tor\""))
                     }
                     "tor+warp" -> assertFalse(json.contains("\"protocol\":\"wireguard\""))
                     "warp" -> assertTrue(json.contains("\"protocol\":\"wireguard\""))
@@ -315,20 +318,18 @@ class XeovoFeatureMatrixTest {
                 )
                 assertValidJson(label, json)
 
-                val torStandalone = torOn && !frontOn
-                if (torStandalone) {
+                val selectedServerOverTor = torOn && !frontOn
+                if (selectedServerOverTor) {
                     assertTrue("$label missing tor tag", json.contains("\"tag\":\"tor\""))
-                    assertTrue("$label missing catch-all", json.contains("\"network\":[\"tcp\",\"udp\"]"))
+                    assertTrue("$label missing Tor dialer chain", json.contains("\"dialerProxy\":\"tor\""))
+                    assertFalse("$label unexpected Tor catch-all", json.contains("\"outboundTag\":\"tor\""))
                     assertFalse("$label WARP leaked", json.contains("\"protocol\":\"wireguard\""))
                     assertFalse("$label fragment leaked", json.contains("\"tag\":\"fragment\""))
                     assertFalse("$label byedpi leaked", json.contains("\"tag\":\"byedpi\""))
                 }
                 if (torOn && frontOn) {
-                    assertTrue("$label missing onion rule", json.contains("regexp:.*\\\\.onion"))
-                    assertFalse(
-                        "$label steal-all tor",
-                        json.contains("\"outboundTag\":\"tor\",\"network\":[\"tcp\",\"udp\"]")
-                    )
+                    assertFalse("$label unexpected onion fallback", json.contains("regexp:.*\\\\.onion"))
+                    assertFalse("$label unexpected Tor route", json.contains("\"outboundTag\":\"tor\""))
                     assertFalse("$label WARP with front", json.contains("\"protocol\":\"wireguard\""))
                 }
                 if (frontOn) {

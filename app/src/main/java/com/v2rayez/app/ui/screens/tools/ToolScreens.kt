@@ -981,14 +981,22 @@ private fun SniResultRow(r: SniScanResult, isBest: Boolean, isActive: Boolean, o
 fun TorScreen(onBack: () -> Unit, viewModel: com.v2rayez.app.ui.viewmodel.TorViewModel = hiltViewModel()) {
     val s by viewModel.state.collectAsState()
     val status by viewModel.status.collectAsState()
-    val busy by viewModel.busy.collectAsState()
+    val autoSetupRunning by viewModel.autoSetupRunning.collectAsState()
+    val connectionTestRunning by viewModel.connectionTestRunning.collectAsState()
     val probeLog by viewModel.probeLog.collectAsState()
     val message by viewModel.message.collectAsState()
+    val torConflict by viewModel.torConflictDialog.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val vpnPermission = com.v2rayez.app.ui.LocalVpnPermission.current
     // Recompute when the Tor state changes: a PT binary may become usable after a
     // start attempt, so don't freeze this list for the lifetime of the screen.
     val availableTransports = remember(status.state) { viewModel.availableTransports() }
+
+    com.v2rayez.app.ui.components.TorConflictDialog(
+        state = torConflict,
+        onConfirm = viewModel::confirmTorConflict,
+        onDismiss = viewModel::dismissTorConflict
+    )
 
     LaunchedEffect(message) {
         message?.let {
@@ -1000,7 +1008,8 @@ fun TorScreen(onBack: () -> Unit, viewModel: com.v2rayez.app.ui.viewmodel.TorVie
     TorContent(
         tor = s.tor,
         status = status,
-        busy = busy,
+        autoSetupRunning = autoSetupRunning,
+        connectionTestRunning = connectionTestRunning,
         probeLog = probeLog,
         availableTransports = availableTransports,
         onBack = onBack,
@@ -1042,7 +1051,8 @@ fun TorScreen(onBack: () -> Unit, viewModel: com.v2rayez.app.ui.viewmodel.TorVie
 private fun TorContent(
     tor: TorConfig,
     status: TorStatus,
-    busy: Boolean,
+    autoSetupRunning: Boolean,
+    connectionTestRunning: Boolean,
     probeLog: List<String> = emptyList(),
     availableTransports: List<TorTransport>,
     onBack: () -> Unit,
@@ -1075,17 +1085,27 @@ private fun TorContent(
 
         // One-tap: auto-probe transports and bridges.
         PrimaryButton(
-            stringResource(if (busy) R.string.tor_autosetup_running else R.string.tor_autosetup),
+            stringResource(if (autoSetupRunning) R.string.tor_autosetup_running else R.string.tor_autosetup),
             onClick = onAutoSetup,
             modifier = Modifier.fillMaxWidth(),
-            enabled = !busy
+            enabled = !autoSetupRunning
         )
         VSpacer(8)
         TextButton(
             onClick = onTestConnection,
-            enabled = !busy && tor.enabled,
+            enabled = !connectionTestRunning && tor.enabled,
             modifier = Modifier.fillMaxWidth()
         ) {
+            // Disabling the button alone gave no feedback that anything was happening —
+            // pair it with a small spinner so "test connection" doesn't look frozen.
+            if (connectionTestRunning) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                HSpacer(8)
+            }
             Text(stringResource(R.string.tor_test_connection))
         }
         if (probeLog.isNotEmpty()) {
@@ -1289,7 +1309,8 @@ private fun TorScreenPreview() {
         TorContent(
             tor = TorConfig(enabled = true, engine = TorEngineType.NATIVE_C, transport = TorTransport.VANILLA),
             status = TorStatus(TorState.BOOTSTRAPPING, 43, "Bootstrapped 43%: Loading relay descriptors", TorEngineType.NATIVE_C),
-            busy = false,
+            autoSetupRunning = false,
+            connectionTestRunning = false,
             availableTransports = listOf(TorTransport.DIRECT, TorTransport.VANILLA),
             onBack = {}, onToggleEnabled = {}, onSetTransport = {},
             onSetBridges = {}, onGetNewBridges = {}, onAutoSetup = {}, onTestConnection = {},
@@ -1477,14 +1498,21 @@ private fun diagCheckLabelRes(id: String): Int = when (id) {
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_INTERNET -> R.string.diag_check_internet
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_DNS -> R.string.diag_check_dns
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_PUBLIC_IP -> R.string.diag_check_public_ip
+    com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_VPN_ACTIVE -> R.string.diag_check_vpn_active
+    com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_CORE_RUNNING -> R.string.diag_check_core_running
+    com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_LOCAL_DNS -> R.string.diag_check_local_dns
+    com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TUNNEL_GENERATE_204 -> R.string.diag_check_generate_204
+    com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_PER_APP_POLICY -> R.string.diag_check_per_app
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TUNNEL_LATENCY -> R.string.diag_check_tunnel_latency
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TUNNEL_IP -> R.string.diag_check_tunnel_ip
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_SESSION_TRAFFIC -> R.string.diag_check_session_traffic
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_SERVER_RTT -> R.string.diag_check_server_rtt
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TOR_BOOTSTRAP -> R.string.diag_check_tor_bootstrap
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TOR_SOCKS -> R.string.diag_check_tor_socks
+    com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TOR_DNS -> R.string.diag_check_tor_dns
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TOR_EXIT_IP -> R.string.diag_check_tor_exit
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_SNI_PROBE -> R.string.diag_check_sni
+    com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_PROTOCOL_PACK -> R.string.diag_check_protocol_pack
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_TOR_PACKS -> R.string.diag_check_tor_packs
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_HOTSPOT -> R.string.diag_check_hotspot
     com.v2rayez.app.ui.viewmodel.DiagnosticsViewModel.ID_ALWAYS_ON -> R.string.diag_check_always_on

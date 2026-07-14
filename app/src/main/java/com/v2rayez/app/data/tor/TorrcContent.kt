@@ -25,7 +25,8 @@ internal object TorrcContent {
         add("AvoidDiskWrites 1")
         // Required so NativeCTorEngine can parse Bootstrapped NN% from stdout.
         add("Log notice stdout")
-        add("SafeLogging 0")
+        // Preserve actionable daemon errors without exposing bridge/relay addresses to telemetry.
+        add("SafeLogging 1")
         addAll(ptLines)
         bridges.forEach { raw ->
             val line = raw.trim().removePrefix("Bridge ").trim()

@@ -82,14 +82,20 @@ object PerAppTunnelPolicy {
         addDisallowed: (String) -> Unit,
         addAllowed: (String) -> Unit,
         decision: Decision
-    ) {
+    ): List<String> {
+        val failures = mutableListOf<String>()
+        fun apply(packageName: String, operation: (String) -> Unit) {
+            runCatching { operation(packageName) }
+                .onFailure { failures += packageName }
+        }
         when (decision.mode) {
             Mode.FULL_DEVICE_EXCEPT_SELF ->
-                decision.packages.forEach { runCatching { addDisallowed(it) } }
+                decision.packages.forEach { apply(it, addDisallowed) }
             Mode.BYPASS_LIST ->
-                decision.packages.forEach { runCatching { addDisallowed(it) } }
+                decision.packages.forEach { apply(it, addDisallowed) }
             Mode.ALLOW_LIST ->
-                decision.packages.forEach { runCatching { addAllowed(it) } }
+                decision.packages.forEach { apply(it, addAllowed) }
         }
+        return failures
     }
 }

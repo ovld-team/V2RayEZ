@@ -12,6 +12,9 @@ import com.v2rayez.app.domain.model.ProxyCoreType
 import com.v2rayez.app.domain.model.TorTransport
 import com.v2rayez.app.domain.repository.SettingsRepository
 import com.v2rayez.app.domain.repository.VpnController
+import com.v2rayez.app.ui.tor.TorConflictHandler
+import com.v2rayez.app.ui.tor.TorConflictRemediationKind
+import com.v2rayez.app.ui.tor.TorConflictUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import android.content.Context
@@ -45,6 +48,11 @@ class TorViewModel @Inject constructor(
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
+    private val torConflict = TorConflictHandler(settings, vpn, viewModelScope, controller)
+    val torConflictDialog: StateFlow<TorConflictUi?> = torConflict.dialog
+    fun confirmTorConflict() = torConflict.confirm()
+    fun dismissTorConflict() = torConflict.dismiss()
+
     fun clearMessage() {
         _message.value = null
     }
@@ -54,18 +62,25 @@ class TorViewModel @Inject constructor(
     private fun edit(transform: (AppSettings) -> AppSettings) = viewModelScope.launch { settings.update(transform) }
 
     fun setEnabled(v: Boolean) {
-        edit { it.copy(tor = it.tor.copy(enabled = v)) }
-        viewModelScope.launch {
-            val cfg = settings.current().tor.copy(enabled = v)
-            if (v) {
-                controller.start(cfg)
-            } else {
+        if (!v) {
+            edit { it.copy(tor = it.tor.copy(enabled = false)) }
+            viewModelScope.launch {
                 if (settings.current().tor.routeAllDevice || isTorVpnSession()) {
                     settings.update { it.copy(tor = it.tor.copy(routeAllDevice = false)) }
                     vpn.disconnect()
                 }
                 controller.stop()
             }
+            return
+        }
+        // Domain-front dialer exits Tor — refuse enabling Tor while fronting is on.
+        viewModelScope.launch {
+            if (settings.current().domainFront.enabled) {
+                _message.value = context.getString(R.string.vpn_error_tor_fronting_mutex)
+                return@launch
+            }
+            settings.update { it.copy(tor = it.tor.copy(enabled = true)) }
+            controller.start(settings.current().tor)
         }
     }
 
@@ -74,40 +89,46 @@ class TorViewModel @Inject constructor(
      */
     fun setRouteAllDevice(route: Boolean) {
         viewModelScope.launch {
-            val current = settings.current()
-            if (route) {
-                if (current.mitm.enabled && current.mitm.captureAllApps) {
-                    _message.value = context.getString(R.string.tor_mutex_mitm)
-                    return@launch
-                }
-                settings.update {
-                    it.copy(
-                        defaultCore = ProxyCoreType.XRAY,
-                        tor = it.tor.copy(enabled = true, routeAllDevice = true)
-                    )
-                }
-                if (controller.status.value.state != TorState.CONNECTED) {
-                    controller.start(settings.current().tor)
-                }
-                when (vpn.connectionState.value.status) {
-                    ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING -> {
-                        vpn.disconnect()
-                        // Never toggle while still CONNECTED — wait for clean disconnect first.
-                        withTimeoutOrNull(15_000) {
-                            vpn.connectionState.first {
-                                it.status == ConnectionStatus.DISCONNECTED
-                            }
-                        }
-                        vpn.toggle()
-                    }
-                    ConnectionStatus.DISCONNECTED -> vpn.toggle()
-                }
-            } else {
+            if (!route) {
                 settings.update { it.copy(tor = it.tor.copy(routeAllDevice = false)) }
                 if (isTorVpnSession()) {
                     vpn.disconnect()
                 }
+                return@launch
             }
+            val current = settings.current()
+            torConflict.runOrPrompt(
+                blocked = current.mitm.enabled && current.mitm.captureAllApps,
+                titleRes = R.string.mitm_conflict_title,
+                messageRes = R.string.mitm_conflict_tor_route_all,
+                confirmRes = R.string.mitm_conflict_disable_and_continue,
+                kind = TorConflictRemediationKind.DISABLE_MITM_CAPTURE
+            ) { enableRouteAllDevice() }
+        }
+    }
+
+    private suspend fun enableRouteAllDevice() {
+        settings.update {
+            it.copy(
+                defaultCore = ProxyCoreType.XRAY,
+                tor = it.tor.copy(enabled = true, routeAllDevice = true)
+            )
+        }
+        if (controller.status.value.state != TorState.CONNECTED) {
+            controller.start(settings.current().tor)
+        }
+        when (vpn.connectionState.value.status) {
+            ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING -> {
+                vpn.disconnect()
+                // Never toggle while still CONNECTED — wait for clean disconnect first.
+                withTimeoutOrNull(15_000) {
+                    vpn.connectionState.first {
+                        it.status == ConnectionStatus.DISCONNECTED
+                    }
+                }
+                vpn.toggle()
+            }
+            ConnectionStatus.DISCONNECTED -> vpn.toggle()
         }
     }
 
@@ -136,44 +157,54 @@ class TorViewModel @Inject constructor(
 
     fun getNewBridges(onResult: (Int) -> Unit = {}) {
         viewModelScope.launch {
-            _busy.value = true
+            _bridgeRequestRunning.value = true
             val transport = settings.current().tor.transport
             val fresh = controller.requestNewBridges(transport)
             if (fresh.isNotEmpty()) {
                 edit { it.copy(tor = it.tor.copy(bridges = fresh)) }
             }
-            _busy.value = false
+            _bridgeRequestRunning.value = false
             onResult(fresh.size)
         }
     }
 
-    private val _busy = MutableStateFlow(false)
-    val busy: StateFlow<Boolean> = _busy.asStateFlow()
+    private val _bridgeRequestRunning = MutableStateFlow(false)
+    val bridgeRequestRunning: StateFlow<Boolean> = _bridgeRequestRunning.asStateFlow()
+
+    private val _autoSetupRunning = MutableStateFlow(false)
+    val autoSetupRunning: StateFlow<Boolean> = _autoSetupRunning.asStateFlow()
+
+    private val _connectionTestRunning = MutableStateFlow(false)
+    val connectionTestRunning: StateFlow<Boolean> = _connectionTestRunning.asStateFlow()
 
     private val _probeLog = MutableStateFlow<List<String>>(emptyList())
     val probeLog: StateFlow<List<String>> = _probeLog.asStateFlow()
 
     fun autoSetup(onDone: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            _busy.value = true
-            _probeLog.value = emptyList()
-            val cfg = controller.autoSetup(settings.current().tor) { line ->
-                _probeLog.value = (_probeLog.value + line).takeLast(40)
+            _autoSetupRunning.value = true
+            try {
+                _probeLog.value = emptyList()
+                val cfg = controller.autoSetup(settings.current().tor) { line ->
+                    _probeLog.value = (_probeLog.value + line).takeLast(40)
+                }
+                settings.update { it.copy(tor = cfg) }
+                onDone(controller.status.value.state == TorState.CONNECTED)
+            } finally {
+                _autoSetupRunning.value = false
             }
-            settings.update { it.copy(tor = cfg) }
-            val ok = controller.status.value.state == TorState.CONNECTED
-            _busy.value = false
-            onDone(ok)
         }
     }
 
     fun testConnection(onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
-            _busy.value = true
-            val cfg = settings.current().tor
-            val exitOk = controller.testExitReachable(cfg)
-            _busy.value = false
-            onResult(exitOk)
+            _connectionTestRunning.value = true
+            try {
+                val cfg = settings.current().tor
+                onResult(controller.testExitReachable(cfg))
+            } finally {
+                _connectionTestRunning.value = false
+            }
         }
     }
 

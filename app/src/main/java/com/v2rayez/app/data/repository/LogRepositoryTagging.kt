@@ -43,3 +43,9 @@ fun LogRepository.logCore(level: LogLevel, message: String, detail: String? = nu
 
 fun LogRepository.logDownload(level: LogLevel, message: String, detail: String? = null) =
     logTagged(LogTags.DOWNLOAD, level, message, detail)
+
+fun LogRepository.logRouting(level: LogLevel, message: String, detail: String? = null) =
+    logTagged(LogTags.ROUTING, level, message, detail)
+
+fun LogRepository.logFree(level: LogLevel, message: String, detail: String? = null) =
+    logTagged(LogTags.FREE, level, message, detail)

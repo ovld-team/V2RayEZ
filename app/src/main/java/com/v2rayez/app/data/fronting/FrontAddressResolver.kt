@@ -20,11 +20,12 @@ object FrontAddressResolver {
     )
 
     /**
-     * Prefer IPv4 A records for [server.sni] then [server.host].
-     * Returns null when DNS yields nothing usable (caller keeps configured fronts).
+     * Resolve the actual server endpoint, never the TLS SNI/REALITY decoy. In particular,
+     * REALITY commonly uses an unrelated SNI; dialing that hostname reaches the decoy site
+     * instead of the proxy server and makes every fronting strategy fail.
      */
     fun resolveForServer(server: Server): ResolvedFronts? {
-        val host = server.sni.trim().ifBlank { server.host.trim() }
+        val host = server.host.trim().ifBlank { server.sni.trim() }
         if (host.isEmpty() || looksLikeIp(host)) {
             return if (looksLikeIp(host)) {
                 ResolvedFronts(primary = host, fallback = "", sourceHost = host)
@@ -55,7 +56,9 @@ object FrontAddressResolver {
     /** Overlay DNS-resolved fronts onto [config] for this connect attempt (not persisted). */
     fun withResolvedFronts(config: DomainFrontConfig, server: Server): Pair<DomainFrontConfig, String?> {
         val resolved = resolveForServer(server) ?: return config to null
-        val note = "front IP from $resolved.sourceHost → ${resolved.primary}" +
+        // Was `$resolved.sourceHost` (toString() of the data class + literal ".sourceHost") —
+        // the log/UI note never showed the actual hostname it resolved.
+        val note = "front IP from ${resolved.sourceHost} → ${resolved.primary}" +
             if (resolved.fallback.isNotEmpty()) " (fallback ${resolved.fallback})" else ""
         val next = config.copy(
             frontAddress = resolved.primary,

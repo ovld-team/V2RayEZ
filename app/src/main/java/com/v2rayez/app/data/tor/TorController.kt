@@ -5,9 +5,12 @@ import android.util.Log
 import com.v2rayez.app.data.analytics.FailureCategory
 import com.v2rayez.app.data.analytics.RemoteTelemetry
 import com.v2rayez.app.data.core.AddonPackManager
+import com.v2rayez.app.data.repository.logTor
+import com.v2rayez.app.domain.model.LogLevel
 import com.v2rayez.app.domain.model.TorConfig
 import com.v2rayez.app.domain.model.TorEngineType
 import com.v2rayez.app.domain.model.TorTransport
+import com.v2rayez.app.domain.repository.LogRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +64,7 @@ class TorController @Inject constructor(
     private val bridgeProvider: BridgeProvider,
     private val addonPacks: AddonPackManager,
     private val remoteTelemetry: RemoteTelemetry,
+    private val logRepository: LogRepository,
     nativeC: NativeCTorEngine
 ) {
 
@@ -74,6 +78,7 @@ class TorController @Inject constructor(
     private fun setError(message: String, engine: TorEngineType, bootstrapPercent: Int = 0) {
         _status.value = TorStatus(TorState.ERROR, bootstrapPercent, message, engine)
         runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.TOR, message) }
+        runCatching { logRepository.logTor(LogLevel.ERROR, message) }
         Log.e(TAG, message)
     }
 
@@ -92,6 +97,9 @@ class TorController @Inject constructor(
         lastBootstrapBreadcrumb = milestone
         runCatching {
             remoteTelemetry.addBreadcrumb("tor", "bootstrap $milestone%")
+        }
+        runCatching {
+            logRepository.logTor(LogLevel.INFO, "Tor bootstrap $milestone%")
         }
     }
 

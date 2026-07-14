@@ -158,14 +158,29 @@ enum class DownloadMode {
     THROUGH
 }
 
-/** Feature packs the user asked for at the end of onboarding (drives pending installs). */
+/**
+ * Feature packs the user asked for in the welcome wizard.
+ * Each flag maps via [com.v2rayez.app.data.core.OnboardingFeatureMapping] to real settings
+ * and/or [AppSettings.pendingAddonInstall] pack ids — keep that map honest when adding fields.
+ */
 @Serializable
 data class OnboardingWants(
+    /** Queue Tor pack if missing; Tor stays off until the user enables it in Tools. */
     val tor: Boolean = false,
+    /** Marks interest in MITM Domain Fronting tools (no download; CA install required later). */
     val mitm: Boolean = false,
+    /**
+     * Legacy decode field — Browser tab is always present; no longer offered in the wizard.
+     * Ignored by [com.v2rayez.app.data.core.OnboardingFeatureMapping].
+     */
     val browser: Boolean = false,
+    /** Queue ByeDPI pack for DPI desync bypass. */
+    val dpiBypass: Boolean = false,
+    /** Enables LAN / hotspot SOCKS+HTTP sharing ([AppSettings.enableLanSharing]/ [AppSettings.allowLan]). */
     val hotspot: Boolean = false,
+    /** Queue sing-box + Mihomo/Clash Meta core downloads. */
     val processCores: Boolean = false,
+    /** Opt-in anonymous analytics ([AppSettings.analyticsConsent]). */
     val analytics: Boolean = false
 )
 
@@ -663,8 +678,10 @@ data class AppSettings(
 /**
  * Runtime-only DNS hardening for every Tor exit, including Tor used with a selected server.
  *
- * Tor SOCKS cannot carry ordinary UDP DNS. Intercept port 53 in Xray, enable FakeDNS for
- * domain/sniffing fidelity, and send Xray's resolver queries to the embedded Tor DNSPort.
+ * Tor SOCKS cannot carry ordinary UDP DNS. Intercept port 53 in Xray and send resolver queries
+ * to the embedded Tor DNSPort. FakeDNS is deliberately disabled: putting it first in Xray's DNS
+ * server list answers from the synthetic pool without ever consulting Tor DNSPort, and older
+ * AndroidLibXrayLite TUN builds can then lose the fake-IP/domain mapping and blackhole HTTPS.
  */
 fun AppSettings.torEffectiveSettings(): AppSettings {
     if (!tor.enabled) return this
@@ -674,7 +691,7 @@ fun AppSettings.torEffectiveSettings(): AppSettings {
         enableSniffing = true,
         dns = dns.copy(
             remoteDns = "127.0.0.1:$effectiveDnsPort",
-            enableFakeDns = true
+            enableFakeDns = false
         ),
         tor = tor.copy(dnsPort = effectiveDnsPort)
     )

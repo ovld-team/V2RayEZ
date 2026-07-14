@@ -181,10 +181,14 @@ fun ServerListItem(
                 HSpacer(8)
             }
             if (testing) {
+                // Sized up from 16.dp with an explicit track so the probe spinner reads as
+                // obvious motion instead of a barely-visible dot (matches the fix applied to
+                // the Free Servers row indicator for the same "is this frozen?" complaint).
                 CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = MaterialTheme.colorScheme.primary
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.5.dp,
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                 )
             } else {
                 SignalBars(level = server.signal)

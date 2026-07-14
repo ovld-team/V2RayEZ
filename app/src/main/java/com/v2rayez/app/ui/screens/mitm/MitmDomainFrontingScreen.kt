@@ -57,6 +57,7 @@ import com.v2rayez.app.ui.components.OutlinedActionButton
 import com.v2rayez.app.ui.components.PrimaryButton
 import com.v2rayez.app.ui.components.SectionHeader
 import com.v2rayez.app.ui.components.SettingSwitchRow
+import com.v2rayez.app.ui.components.TorConflictDialog
 import com.v2rayez.app.ui.components.V2BackTopBar
 import com.v2rayez.app.ui.components.V2Checkbox
 import com.v2rayez.app.ui.components.V2FilterChip
@@ -105,6 +106,13 @@ internal fun MitmDomainFrontingContent(
     val caPresent by viewModel.caPresent.collectAsState()
     val fingerprint by viewModel.fingerprint.collectAsState()
     val message by viewModel.message.collectAsState()
+    val torConflict by viewModel.torConflictDialog.collectAsState()
+
+    TorConflictDialog(
+        state = torConflict,
+        onConfirm = viewModel::confirmTorConflict,
+        onDismiss = viewModel::dismissTorConflict
+    )
 
     LaunchedEffect(message) {
         message?.let {

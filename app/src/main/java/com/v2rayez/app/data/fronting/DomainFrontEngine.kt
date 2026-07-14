@@ -32,9 +32,17 @@ class DomainFrontEngine @Inject constructor() {
     val activeTargetLabel: String get() = _status.value.activeTargetLabel
 
     private var lastFrontKey: String? = null
+    private var socketProtectorConfigured = false
+    private var engineError: String = ""
+
+    /** Runtime dialer diagnostics; the VPN service maps failures to ERROR logs. */
+    var onLog: ((String) -> Unit)? = null
 
     private val listener = object : DomainFrontDialer.Listener {
-        override fun onLogLine(line: String?) = Unit
+        override fun onLogLine(line: String?) {
+            line?.let { onLog?.invoke(it) }
+            publishStatus()
+        }
         override fun onProxyState(running: Boolean, targetLabel: String?, trafficSummary: String?) {
             publishStatus()
         }
@@ -46,10 +54,14 @@ class DomainFrontEngine @Inject constructor() {
     }
 
     fun start(config: DomainFrontConfig): Boolean {
-        if (!config.enabled) {
-            stop()
+        val validationError = validate(config)
+        if (validationError != null) {
+            dialer.stop()
+            engineError = validationError
+            publishStatus()
             return false
         }
+        engineError = ""
         val frontKey = listOf(
             config.frontAddress,
             config.fallbackAddress,
@@ -81,10 +93,13 @@ class DomainFrontEngine @Inject constructor() {
     /** Bind dialer sockets to the physical network via VpnService.protect. */
     fun setSocketProtector(protector: DomainFrontDialer.SocketProtector?) {
         dialer.setSocketProtector(protector)
+        socketProtectorConfigured = protector != null
     }
 
     fun stop() {
         dialer.stop()
+        socketProtectorConfigured = false
+        onLog = null
         publishStatus()
     }
 
@@ -95,10 +110,26 @@ class DomainFrontEngine @Inject constructor() {
     private fun publishStatus() {
         _status.value = Status(
             isRunning = DomainFrontDialer.isRunning(),
-            lastError = DomainFrontDialer.getLastError().orEmpty(),
+            lastError = engineError.ifBlank { DomainFrontDialer.getLastError().orEmpty() },
             trafficSummary = DomainFrontDialer.getTrafficSummary().orEmpty(),
             activeTargetLabel = DomainFrontDialer.getActiveTargetLabel()
         )
+    }
+
+    private fun validate(config: DomainFrontConfig): String? = when {
+        !config.enabled -> "Domain fronting is disabled"
+        config.listenHost.trim().lowercase() !in LOOPBACK_HOSTS ->
+            "Domain fronting listener must use loopback (127.0.0.1 or ::1)"
+        config.listenPort !in 1..65535 -> "Invalid domain fronting listen port: ${config.listenPort}"
+        config.frontAddress.isBlank() -> "Domain fronting front address is empty"
+        config.frontPort !in 1..65535 -> "Invalid domain fronting target port: ${config.frontPort}"
+        config.effectiveFakeSni.isBlank() -> "Domain fronting fake SNI is empty"
+        !socketProtectorConfigured -> "Domain fronting cannot start without VpnService socket protection"
+        else -> null
+    }
+
+    private companion object {
+        val LOOPBACK_HOSTS = setOf("127.0.0.1", "localhost", "::1", "[::1]")
     }
 }
 

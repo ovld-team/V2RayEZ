@@ -195,6 +195,14 @@ object MitmConfigBuilder {
                     put("port", 443)
                     put("followRedirect", true)
                 }
+                // After TLS termination, recover the HTTP Host for the per-front routing rules.
+                // Without sniffing this inbound only carried the loopback redirect destination,
+                // so every decrypted request missed its domain rule and fell through to direct.
+                putJsonObject("sniffing") {
+                    put("enabled", true)
+                    putJsonArray("destOverride") { add("http"); add("tls") }
+                    put("routeOnly", false)
+                }
                 putJsonObject("streamSettings") {
                     put("security", "tls")
                     putJsonObject("tlsSettings") {

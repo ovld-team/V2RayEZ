@@ -2,11 +2,13 @@ package com.v2rayez.app.ui.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.v2rayez.app.R
 import com.v2rayez.app.data.fronting.DomainFrontEngine
 import com.v2rayez.app.data.fronting.DomainFrontTuning
 import com.v2rayez.app.data.mock.MockLogRepository
 import com.v2rayez.app.data.mock.MockSettingsRepository
 import com.v2rayez.app.data.mock.MockVpnController
+import com.v2rayez.app.data.tor.TorController
 import com.v2rayez.app.domain.model.AppSettings
 import com.v2rayez.app.domain.model.ConnectionStatus
 import com.v2rayez.app.domain.model.DomainFrontConfig
@@ -15,6 +17,8 @@ import com.v2rayez.app.domain.model.LogLevel
 import com.v2rayez.app.domain.repository.LogRepository
 import com.v2rayez.app.domain.repository.SettingsRepository
 import com.v2rayez.app.domain.repository.VpnController
+import com.v2rayez.app.ui.tor.TorConflictHandler
+import com.v2rayez.app.ui.tor.TorConflictUi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -37,7 +41,8 @@ class DomainFrontingViewModel @Inject constructor(
     private val settings: SettingsRepository,
     private val engine: DomainFrontEngine,
     private val logs: LogRepository,
-    private val vpn: VpnController
+    private val vpn: VpnController,
+    private val torController: TorController? = null
 ) : ViewModel() {
 
     /** Preview / no-arg constructor — [DomainFrontEngine] itself has a no-arg ctor (pure Java dialer, no native calls). */
@@ -45,8 +50,14 @@ class DomainFrontingViewModel @Inject constructor(
         MockSettingsRepository(),
         DomainFrontEngine(),
         MockLogRepository(),
-        MockVpnController()
+        MockVpnController(),
+        null
     )
+
+    private val torConflict = TorConflictHandler(settings, vpn, viewModelScope, torController)
+    val torConflictDialog: StateFlow<TorConflictUi?> = torConflict.dialog
+    fun confirmTorConflict() = torConflict.confirm()
+    fun dismissTorConflict() = torConflict.dismiss()
 
     val state: StateFlow<AppSettings> =
         settings.settings().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
@@ -71,8 +82,22 @@ class DomainFrontingViewModel @Inject constructor(
         edit { it.copy(domainFront = transform(it.domainFront)) }
 
     fun toggleEnabled(v: Boolean) {
-        if (!v) engine.clearStrategyCache()
-        editFront { it.copy(enabled = v) }
+        if (!v) {
+            engine.clearStrategyCache()
+            editFront { it.copy(enabled = false) }
+            return
+        }
+        viewModelScope.launch {
+            torConflict.runOrPrompt(
+                blocked = settings.current().tor.enabled,
+                messageRes = R.string.tor_conflict_domain_front,
+                stopDaemon = true
+            ) {
+                engine.clearStrategyCache()
+                settings.update { it.copy(domainFront = it.domainFront.copy(enabled = true)) }
+                log(LogLevel.INFO, "Domain fronting enabled")
+            }
+        }
     }
 
     fun setFrontAddress(s: String) {

@@ -94,12 +94,13 @@ class XeovoSubscriptionMatrixTest {
     }
 
     @Test
-    fun matrixTorStandalone() {
+    fun matrixSelectedServerOverTor() {
         val s = pickSamples(servers()).firstOrNull() ?: return
         val settings = AppSettings(tor = TorConfig(enabled = true))
         val json = ConfigBuilder.build(s, settings)
         assertTrue(json.contains("\"tag\":\"tor\""))
-        assertTrue(json.contains("\"outboundTag\":\"tor\""))
+        assertTrue(json.contains("\"dialerProxy\":\"tor\""))
+        assertFalse(json.contains("\"outboundTag\":\"tor\""))
     }
 
     @Test
@@ -119,9 +120,10 @@ class XeovoSubscriptionMatrixTest {
         val json = ConfigBuilder.build(s, settings, domainFrontRunning = true)
         assertTrue(json.contains("\"tag\":\"tor\""))
         assertTrue(json.contains("\"address\":\"127.0.0.1\""))
-        assertTrue(json.contains("regexp:.*\\\\.onion"))
-        // Must NOT steal all traffic when fronting
-        assertFalse(json.contains("\"outboundTag\":\"tor\",\"network\":[\"tcp\",\"udp\"]"))
+        // V2RayVpnService rejects Tor + domain fronting before config construction.
+        // The builder must not invent a partial onion or catch-all fallback either.
+        assertFalse(json.contains("regexp:.*\\\\.onion"))
+        assertFalse(json.contains("\"outboundTag\":\"tor\""))
     }
 
     @Test

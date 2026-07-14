@@ -41,12 +41,12 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -595,12 +595,12 @@ private fun WantsPage(
             onToggle = { onChange(wants.copy(mitm = it), analytics) }
         ),
         WantFeature(
-            icon = Icons.Filled.Public,
+            icon = Icons.Filled.Speed,
             accent = AccentBlue,
-            title = stringResource(R.string.wizard_want_browser),
-            description = stringResource(R.string.wizard_want_browser_desc),
-            checked = wants.browser,
-            onToggle = { onChange(wants.copy(browser = it), analytics) }
+            title = stringResource(R.string.wizard_want_dpi),
+            description = stringResource(R.string.wizard_want_dpi_desc),
+            checked = wants.dpiBypass,
+            onToggle = { onChange(wants.copy(dpiBypass = it), analytics) }
         ),
         WantFeature(
             icon = Icons.Filled.Wifi,
