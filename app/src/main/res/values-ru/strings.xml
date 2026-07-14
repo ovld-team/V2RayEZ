@@ -912,6 +912,7 @@
     <string name="activity_disconnected_from">Отключено от %1$s</string>
     <string name="settings_reconnect_hint">Изменения применятся после переподключения VPN</string>
     <string name="settings_reconnect_now">Переподключить</string>
+    <string name="settings_reconnecting">Переподключение…</string>
     <string name="servers_action_favorite">В избранное</string>
     <string name="servers_action_unfavorite">Убрать из избранного</string>
     <string name="servers_action_qr">Показать QR-код</string>
@@ -928,6 +929,7 @@
     <string name="browser_banner_body">Создайте и установите локальный сертификат, чтобы открывать фронтированные сайты здесь.</string>
     <string name="browser_banner_cta">Настроить</string>
     <string name="browser_active_status">MITM активен</string>
+    <string name="browser_vpn_active_status">Через VPN-туннель</string>
     <string name="browser_proxy_inactive">Запустите MITM Domain Fronting, чтобы маршрутизировать этот браузер</string>
     <string name="browser_proxy_api_gate">Прокси встроенного браузера требует Android 10+</string>
     <string name="browser_menu_cd">Меню</string>

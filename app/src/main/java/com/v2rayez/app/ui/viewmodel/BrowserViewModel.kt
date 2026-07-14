@@ -23,8 +23,12 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * Built-in Browser state: MITM readiness, whether the standalone proxy is running,
- * HTTP proxy port for WebView [android.webkit.ProxyController], and API gate for proxy override.
+ * Built-in Browser state.
+ *
+ * The app package is disallowed from the VpnService TUN (so Xray/dialer sockets do not loop).
+ * Chrome (another UID) uses the VPN; this WebView would otherwise hit clearnet and fail under
+ * domain-front / censored networks. On API 30+ we point [android.webkit.ProxyController] at
+ * Xray's local `http-in` (or MITM's HTTP port) so the in-app browser shares the tunnel.
  */
 @HiltViewModel
 class BrowserViewModel @Inject constructor(
@@ -53,9 +57,7 @@ class BrowserViewModel @Inject constructor(
     val proxyRunning: StateFlow<Boolean> = proxy.running
 
     val deviceTunnelRunning: StateFlow<Boolean> = vpn.connectionState
-        .map {
-            it.status == ConnectionStatus.CONNECTED && it.server?.id == "mitm"
-        }
+        .map { it.status == ConnectionStatus.CONNECTED }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private val captureAllApps = settings.settings()
@@ -69,26 +71,43 @@ class BrowserViewModel @Inject constructor(
         proxyError ?: vpnState.errorMessage?.takeIf { captureAll }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val httpPort: StateFlow<Int> = settings.settings()
-        .map { it.mitm.httpPort }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 10809)
+    /**
+     * Local HTTP proxy port for WebView: MITM when its proxy is up, otherwise Xray `http-in`
+     * while the VPN is connected.
+     */
+    val httpPort: StateFlow<Int> = combine(
+        settings.settings(),
+        proxy.running,
+        vpn.connectionState
+    ) { s, mitmOn, conn ->
+        val mitmSession = mitmOn ||
+            (conn.status == ConnectionStatus.CONNECTED && conn.server?.id == "mitm")
+        if (mitmSession) s.mitm.httpPort else s.httpPort
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 10809)
 
     /** WebView ProxyController.setProxyOverride needs API 30+. */
     val proxyApiSupported: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
-    /** Banner "MITM active" when set up and proxy is up. */
+    /**
+     * True when WebView traffic must be forced through a loopback HTTP proxy because the
+     * app UID is excluded from TUN (VPN up and/or MITM standalone proxy up).
+     */
+    val webViewProxyActive: StateFlow<Boolean> = combine(proxy.running, deviceTunnelRunning) {
+            mitmOn, vpnOn -> mitmOn || vpnOn
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Banner: MITM configured + running, or any VPN tunnel (domain-front included). */
     val ready: StateFlow<Boolean> = combine(
         mitmReady,
-        proxyRunning,
+        proxy.running,
         deviceTunnelRunning
     ) { configured, proxyOn, tunnelOn ->
-        configured && (proxyOn || tunnelOn)
+        tunnelOn || (configured && proxyOn)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     /**
-     * Entering the built-in browser should produce a usable tunnel, not just an inactive banner.
-     * Capture-all sessions already route the WebView through VpnService; proxy-only mode starts
-     * the local HTTP/SOCKS service that WebView's ProxyController consumes.
+     * Entering the built-in browser should produce a usable tunnel when MITM is configured.
+     * Capture-all / ordinary VPN already route Chrome via VpnService; WebView uses ProxyController.
      */
     fun ensureBrowserTunnel() {
         if (!mitmReady.value || proxy.running.value || deviceTunnelRunning.value) return

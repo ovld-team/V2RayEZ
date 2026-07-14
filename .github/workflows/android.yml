@@ -203,8 +203,7 @@ jobs:
           else
             gh release create "$TAG" \
               --repo "${{ github.repository }}" \
-              --title "V2RayEZ v${VER} RC" \
-              --prerelease \
+              --title "V2RayEZ v${VER}" \
               --generate-notes \
               "${ASSETS[@]}"
           fi

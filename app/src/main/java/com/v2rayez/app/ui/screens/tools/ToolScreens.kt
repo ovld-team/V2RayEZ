@@ -557,6 +557,8 @@ fun AppProxyScreen(
                 ReconnectBanner(
                     hint = stringResource(R.string.appproxy_reconnect_hint),
                     actionLabel = stringResource(R.string.settings_reconnect_now),
+                    reconnectingLabel = stringResource(R.string.settings_reconnecting),
+                    reconnecting = conn.status == ConnectionStatus.CONNECTING,
                     onReconnect = viewModel::reconnectVpn
                 )
             }

@@ -1508,7 +1508,9 @@ class SettingsViewModel @Inject constructor(
 
     /** Per-app rules are applied only when VpnService rebuilds the TUN — reconnect to apply. */
     fun reconnectVpn() {
-        val server = vpn.connectionState.value.server ?: return
+        val state = vpn.connectionState.value
+        val server = state.server ?: return
+        // Always re-enter CONNECTING so banners / Home react; service tears down the prior TUN.
         vpn.connect(server)
     }
 

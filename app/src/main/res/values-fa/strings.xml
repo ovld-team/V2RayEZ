@@ -878,6 +878,7 @@
     <string name="activity_disconnected_from">قطع از %1$s</string>
     <string name="settings_reconnect_hint">تغییرات پس از اتصال مجدد VPN اعمال می‌شوند</string>
     <string name="settings_reconnect_now">اتصال مجدد</string>
+    <string name="settings_reconnecting">در حال اتصال مجدد…</string>
     <string name="servers_action_favorite">افزودن به علاقه‌مندی‌ها</string>
     <string name="servers_action_unfavorite">حذف از علاقه‌مندی‌ها</string>
     <string name="servers_action_qr">نمایش کد QR</string>
@@ -894,6 +895,7 @@
     <string name="browser_banner_body">برای مرور سایت‌های پوشش‌داده‌شده در اینجا، گواهی محلی را بسازید و نصب کنید.</string>
     <string name="browser_banner_cta">راه‌اندازی</string>
     <string name="browser_active_status">MITM فعال است</string>
+    <string name="browser_vpn_active_status">مسیر از تونل VPN</string>
     <string name="browser_proxy_inactive">برای مسیریابی این مرورگر، دامنه‌فرانتینگ MITM را شروع کنید</string>
     <string name="browser_proxy_api_gate">پروکسی مرورگر درون‌برنامه‌ای به Android 10+ نیاز دارد</string>
     <string name="browser_menu_cd">منو</string>

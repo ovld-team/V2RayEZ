@@ -914,6 +914,7 @@
     <string name="activity_disconnected_from">Disconnected from %1$s</string>
     <string name="settings_reconnect_hint">Changes apply after reconnecting the VPN</string>
     <string name="settings_reconnect_now">Reconnect</string>
+    <string name="settings_reconnecting">Reconnecting…</string>
     <string name="servers_action_favorite">Add to Favorites</string>
     <string name="servers_action_unfavorite">Remove from Favorites</string>
     <string name="servers_action_qr">Show QR code</string>
@@ -930,6 +931,7 @@
     <string name="browser_banner_body">Generate and install the local certificate to browse fronted sites here.</string>
     <string name="browser_banner_cta">Set up</string>
     <string name="browser_active_status">MITM proxy active</string>
+    <string name="browser_vpn_active_status">Routing via VPN tunnel</string>
     <string name="browser_proxy_inactive">Start MITM Domain Fronting to route this browser</string>
     <string name="browser_proxy_api_gate">In-app Browser proxy needs Android 10+</string>
     <string name="browser_menu_cd">Menu</string>

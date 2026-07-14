@@ -32,21 +32,19 @@
 2. Download `V2RayEZ-v*-release.apk` and install it (unknown sources allowed).
 3. Optional: in the app open **Core manager** and install addon zips from the same Release.
 
-Current release: [`V2RayEZ-v0.9.98`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v0.9.98) (prerelease until owner gates close).
+Current release: [`V2RayEZ-v1.0.0`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.0).
 
 ### Addon packs
 
-Release assets look like `tor-arm64-v8a.zip`, `lyrebird-arm64-v8a.zip`, …  
-The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v0.9.98` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Local dev uses `gradle.properties`; CI release builds pass the publish tag automatically. Checksums are in `SHA256SUMS.txt`.
+Release assets look like `tor-arm64-v8a.zip`, `lyrebird-arm64-v8a.zip`, `psiphon-arm64-v8a.zip`, `dnstunnel-arm64-v8a.zip`, …  
+The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v1.0.0` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Local dev uses `gradle.properties`; CI release builds pass the publish tag automatically. Checksums are in `SHA256SUMS.txt`.
 
-### Release notes — v0.9.98
+### Release notes — v1.0.0
 
-- **VPN, Tor, and DNS:** Hardened lifecycle ordering, conflict remediation, DNS routing, reconnect teardown, and per-app tunnel policy.
-- **Domain fronting and Browser:** Safer front-address resolution, clearer MITM/fronting failures, and a more reliable proxied Browser flow.
-- **Operations:** Sentry-backed scrubbed bug reports, queued Core manager installs, wizard pack mapping, download validation, and expanded diagnostics.
-- **Review fixes:** Addressed priority audit findings across config generation, service state, telemetry, logging, localization, lint, and tests.
-- **Pack-gated protocols:** Release automation lists Psiphon and DNS tunnel (`dnstt`) vendor sources, but their direct per-ABI URLs/checksums remain placeholders; those packs are not published until pinned upstream artifacts are configured.
-- **Tor:** Treat whole-device routing and native Tor/PT packs as **experimental** until maintainer device smoke passes.
+- **Xray TUN routing (older Android):** Force LocalDNS + sniffing for ordinary tunnels so app DNS no longer bypasses the proxy while TCP tunnels; guard TUN `setBlocking`/`setMetered` for API 26–28; explicit gVisor TUN stack.
+- **Domain fronting (EasySNI parity):** Keep configured CDN edge IPs for TLS/WS fronts; only force origin dial for REALITY. In-app Browser routes through Xray `http-in` because the app UID is excluded from TUN (Chrome already used the VPN).
+- **Per-app proxy UI:** Reconnect banner shows spinner / CONNECTING immediately when reconnect is tapped.
+- **Release:** First stable (`1.0.0`) GitHub release (not prerelease).
 
 ### Build from source
 
@@ -81,7 +79,7 @@ Release signing needs a local `keystore.properties` pointing at your keystore. N
 1. از صفحه [Releases](https://github.com/ovld-team/V2RayEZ/releases) فایل `V2RayEZ-v*-release.apk` را بگیرید و نصب کنید.
 2. برای بسته‌های افزونه، در اپ به **مدیر هسته** بروید یا زیپ‌های همان Release را نصب کنید.
 
-نسخه فعلی: [`V2RayEZ-v0.9.98`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v0.9.98).
+نسخه فعلی: [`V2RayEZ-v1.0.0`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.0).
 
 ### ساخت
 

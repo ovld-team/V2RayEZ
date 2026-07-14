@@ -114,6 +114,8 @@ internal fun BrowserContent(
     val ready by viewModel.ready.collectAsState()
     val mitmReady by viewModel.mitmReady.collectAsState()
     val proxyRunning by viewModel.proxyRunning.collectAsState()
+    val webViewProxyActive by viewModel.webViewProxyActive.collectAsState()
+    val deviceTunnelRunning by viewModel.deviceTunnelRunning.collectAsState()
     val lastError by viewModel.lastError.collectAsState()
     val httpPort by viewModel.httpPort.collectAsState()
     val proxyApiSupported = viewModel.proxyApiSupported
@@ -139,7 +141,7 @@ internal fun BrowserContent(
     }
 
     fun reloadIfProxyReady() {
-        if (shouldDeferInitialLoad(proxyApiSupported, proxyRunning, proxyApplied)) return
+        if (shouldDeferInitialLoad(proxyApiSupported, webViewProxyActive, proxyApplied)) return
         webViewHolder.value?.reload()
     }
 
@@ -160,7 +162,7 @@ internal fun BrowserContent(
         rememberRecent(normalized)
         // If the MITM proxy is expected but its override hasn't applied yet, defer the load —
         // the setProxyOverride callback below will pick up the pending URL once routing is live.
-        if (shouldDeferInitialLoad(proxyApiSupported, proxyRunning, proxyApplied)) return
+        if (shouldDeferInitialLoad(proxyApiSupported, webViewProxyActive, proxyApplied)) return
         webViewHolder.value?.loadUrl(normalized)
     }
 
@@ -173,8 +175,9 @@ internal fun BrowserContent(
         }
     }
 
-    // Apply / clear WebView proxy override when MITM standalone proxy starts/stops.
-    LaunchedEffect(proxyRunning, httpPort, proxyApiSupported) {
+    // Apply / clear WebView proxy override when MITM standalone proxy OR VPN tunnel is up.
+    // App UID is excluded from TUN; without this override, WebView bypasses domain-front/VPN.
+    LaunchedEffect(webViewProxyActive, httpPort, proxyApiSupported) {
         if (!proxyApiSupported || !WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
             proxyApplied = false
             return@LaunchedEffect
@@ -184,15 +187,12 @@ internal fun BrowserContent(
             android.os.Handler(android.os.Looper.getMainLooper()).post(r)
         }
         runCatching {
-            if (proxyRunning) {
+            if (webViewProxyActive) {
                 proxyApplied = false
                 val config = ProxyConfig.Builder()
                     .addProxyRule("127.0.0.1:$httpPort")
                     .addDirect("<-loopback>")
                     .build()
-                // Only after this callback is the override guaranteed live for the WebView
-                // process. Load/reload the pending URL here so YouTube/media CONNECTs are
-                // routed through the MITM http-in from the very first request.
                 ProxyController.getInstance().setProxyOverride(config, mainExecutor) {
                     if (gen != proxyOverrideGeneration) return@setProxyOverride
                     proxyApplied = true
@@ -211,9 +211,8 @@ internal fun BrowserContent(
                 }
             }
         }.onFailure {
-            // Don't leave the WebView blank forever if ProxyController rejects the override.
             proxyApplied = false
-            if (proxyRunning) webViewHolder.value?.loadUrl(pendingUrl)
+            if (webViewProxyActive) webViewHolder.value?.loadUrl(pendingUrl)
         }
     }
 
@@ -254,14 +253,14 @@ internal fun BrowserContent(
 
     val isHome = pendingUrl == HOME_URL
     val statusColor = when {
-        !proxyApiSupported -> Warning
+        !proxyApiSupported && webViewProxyActive -> Warning
         ready -> Connected
-        !mitmReady -> Warning
         !lastError.isNullOrBlank() -> ErrorRed
         else -> Warning
     }
     val statusMessage = when {
-        !proxyApiSupported -> stringResource(R.string.browser_proxy_api_gate)
+        !proxyApiSupported && webViewProxyActive -> stringResource(R.string.browser_proxy_api_gate)
+        deviceTunnelRunning -> stringResource(R.string.browser_vpn_active_status)
         ready -> stringResource(R.string.browser_active_status)
         !mitmReady -> stringResource(R.string.browser_banner_title)
         !lastError.isNullOrBlank() -> lastError.orEmpty()
@@ -543,7 +542,7 @@ internal fun BrowserContent(
                         // applied; the setProxyOverride callback loads pendingUrl once routing is
                         // live. In every other case (no proxy / API<30 / override already applied)
                         // load immediately so the Browser isn't blank.
-                        if (!shouldDeferInitialLoad(proxyApiSupported, proxyRunning, proxyApplied)) {
+                        if (!shouldDeferInitialLoad(proxyApiSupported, webViewProxyActive, proxyApplied)) {
                             loadUrl(pendingUrl)
                         }
                     }

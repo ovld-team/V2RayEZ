@@ -6,10 +6,14 @@ import java.net.Inet4Address
 import java.net.InetAddress
 
 /**
- * For real-SNI-preserved fronting, the TCP target must accept TLS for the server's SNI.
- * Generic Cloudflare IPs (e.g. 104.19.229.21) reject unrelated hostnames with a TLS alert.
- * Resolve the server host/SNI so the dialer reaches an IP that can complete the handshake,
- * while fake-SNI probes + ClientHello fragmentation still run on that socket path.
+ * Chooses the TCP dial target for [DomainFrontDialer].
+ *
+ * EasySNI / CDN fronting dials a **front edge IP** (Cloudflare/Google defaults) while TLS
+ * ClientHello fragmentation still carries Xray's real SNI. Overwriting those fronts with the
+ * origin host breaks CDN fronting.
+ *
+ * REALITY (and other origin-direct TLS) must dial an IP that accepts the server's TLS identity —
+ * usually [Server.host], never a decoy REALITY SNI — or every strategy TLS-alerts.
  */
 object FrontAddressResolver {
 
@@ -20,9 +24,7 @@ object FrontAddressResolver {
     )
 
     /**
-     * Resolve the actual server endpoint, never the TLS SNI/REALITY decoy. In particular,
-     * REALITY commonly uses an unrelated SNI; dialing that hostname reaches the decoy site
-     * instead of the proxy server and makes every fronting strategy fail.
+     * Resolve the actual server endpoint, never the TLS SNI/REALITY decoy.
      */
     fun resolveForServer(server: Server): ResolvedFronts? {
         val host = server.host.trim().ifBlank { server.sni.trim() }
@@ -53,22 +55,39 @@ object FrontAddressResolver {
         )
     }
 
-    /** Overlay DNS-resolved fronts onto [config] for this connect attempt (not persisted). */
+    /** Overlay dial targets onto [config] for this connect attempt (not persisted). */
     fun withResolvedFronts(config: DomainFrontConfig, server: Server): Pair<DomainFrontConfig, String?> {
-        val resolved = resolveForServer(server) ?: return config to null
-        // Was `$resolved.sourceHost` (toString() of the data class + literal ".sourceHost") —
-        // the log/UI note never showed the actual hostname it resolved.
-        val note = "front IP from ${resolved.sourceHost} → ${resolved.primary}" +
-            if (resolved.fallback.isNotEmpty()) " (fallback ${resolved.fallback})" else ""
-        val next = config.copy(
-            frontAddress = resolved.primary,
-            fallbackAddress = resolved.fallback.ifBlank {
-                // Keep a secondary only if it differs from primary; otherwise leave empty
-                // so we don't bounce to an unrelated default CF IP.
+        // REALITY / origin-direct: must reach the real endpoint (EasySNI passthrough to origin).
+        if (needsOriginDial(server)) {
+            val resolved = resolveForServer(server) ?: return config to null
+            val note = "origin dial ${resolved.sourceHost} → ${resolved.primary}" +
+                if (resolved.fallback.isNotEmpty()) " (fallback ${resolved.fallback})" else ""
+            val next = config.copy(
+                frontAddress = resolved.primary,
+                fallbackAddress = resolved.fallback.ifBlank { "" }
+            )
+            return next to note
+        }
+        // CDN / EasySNI-style: keep configured Cloudflare (or user) edge IPs.
+        val front = config.frontAddress.trim().ifBlank { DomainFrontDialer.DEFAULT_FRONT_ADDRESS }
+        val fallback = config.fallbackAddress.trim().ifBlank {
+            if (front == DomainFrontDialer.DEFAULT_FRONT_ADDRESS) {
+                DomainFrontDialer.DEFAULT_FALLBACK_ADDRESS
+            } else {
                 ""
             }
-        )
-        return next to note
+        }
+        val note = "CDN front $front" +
+            if (fallback.isNotEmpty()) " (fallback $fallback)" else "" +
+            " / fake-SNI ${config.effectiveFakeSni}"
+        return config.copy(frontAddress = front, fallbackAddress = fallback) to note
+    }
+
+    /** REALITY must dial the origin; CDN/EasySNI fronts stay on configured edge IPs. */
+    internal fun needsOriginDial(server: Server): Boolean {
+        val hay = "${server.security} ${server.streamSecurity}".lowercase()
+        return hay.contains("reality") ||
+            (server.publicKey.isNotBlank() && hay.contains("reality"))
     }
 
     private fun looksLikeIp(value: String): Boolean {

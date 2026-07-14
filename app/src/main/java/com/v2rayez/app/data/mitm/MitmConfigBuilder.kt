@@ -152,6 +152,7 @@ object MitmConfigBuilder {
                     putJsonObject("settings") {
                         put("name", "xray0")
                         put("mtu", mtu.coerceIn(1280, 1400))
+                        put("stack", "gvisor")
                     }
                     putJsonObject("sniffing") {
                         put("enabled", true)

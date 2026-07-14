@@ -7,6 +7,7 @@ import com.v2rayez.app.domain.model.RoutingConfig
 import com.v2rayez.app.domain.model.RoutingMode
 import com.v2rayez.app.domain.model.TorConfig
 import com.v2rayez.app.domain.model.torEffectiveSettings
+import com.v2rayez.app.domain.model.tunDnsEffectiveSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -500,10 +501,13 @@ class ConfigBuilderTest {
     }
 
     @Test
-    fun localDnsOffRoutesPort53Direct() {
-        val json = ConfigBuilder.build(vless(), AppSettings(enableLocalDns = false))
-        assertTrue(json.contains("\"outboundTag\":\"direct\""))
-        assertTrue(json.contains("\"port\":\"53\""))
+    fun tunnelDnsEffectiveForcesLocalDnsEvenWhenOff() {
+        val raw = AppSettings(enableLocalDns = false, enableSniffing = false)
+        val effective = raw.tunDnsEffectiveSettings()
+        assertTrue(effective.enableLocalDns)
+        assertTrue(effective.enableSniffing)
+        val json = ConfigBuilder.build(vless(), raw)
+        assertTrue(json.contains("\"outboundTag\":\"dns-out\",\"port\":\"53\""))
     }
 
     @Test

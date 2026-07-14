@@ -8,7 +8,7 @@ import com.v2rayez.app.domain.model.RuleOutbound
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.WarpConfig
 import com.v2rayez.app.domain.model.WarpMode
-import com.v2rayez.app.domain.model.torEffectiveSettings
+import com.v2rayez.app.domain.model.tunDnsEffectiveSettings
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -141,7 +141,7 @@ object ConfigBuilder {
         includeTun: Boolean = true,
         geositeAvailable: Boolean = false
     ): String {
-        val effectiveSettings = settings.torEffectiveSettings()
+        val effectiveSettings = settings.tunDnsEffectiveSettings()
         val obj = buildJsonObject {
             put("log", logBlock(effectiveSettings))
             // Enable outbound traffic accounting so queryStats("proxy","uplink"/"downlink")
@@ -288,6 +288,8 @@ object ConfigBuilder {
                 putJsonObject("settings") {
                     put("name", "xray0")
                     put("mtu", settings.mtu.coerceIn(1280, 1400))
+                    // Explicit gVisor stack — preferred for Android VPN fds across API levels.
+                    put("stack", "gvisor")
                 }
                 putSniffing(settings)
             }

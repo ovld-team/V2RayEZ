@@ -362,7 +362,9 @@ fun ReconnectBanner(
     hint: String,
     actionLabel: String,
     onReconnect: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    reconnecting: Boolean = false,
+    reconnectingLabel: String = actionLabel
 ) {
     CardSurface(modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
         Row(
@@ -371,12 +373,21 @@ fun ReconnectBanner(
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                Icons.Filled.Refresh,
-                contentDescription = null,
-                tint = Warning,
-                modifier = Modifier.size(18.dp)
-            )
+            if (reconnecting) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = Warning,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            } else {
+                Icon(
+                    Icons.Filled.Refresh,
+                    contentDescription = null,
+                    tint = Warning,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
             HSpacer(10)
             Text(
                 hint,
@@ -384,8 +395,8 @@ fun ReconnectBanner(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = onReconnect) {
-                Text(actionLabel)
+            TextButton(onClick = onReconnect, enabled = !reconnecting) {
+                Text(if (reconnecting) reconnectingLabel else actionLabel)
             }
         }
     }

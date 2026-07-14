@@ -697,6 +697,22 @@ fun AppSettings.torEffectiveSettings(): AppSettings {
     )
 }
 
+/**
+ * Runtime-only TUN DNS hardening for ordinary (non-Tor) Xray sessions.
+ *
+ * Device apps resolve through VpnService DNS peers. With LocalDNS/FakeDNS both off (defaults),
+ * UDP/53 is marked `direct` while TCP goes `proxy` — that mismatch blackholes many apps on
+ * older Android stacks even when socks/outbound probes still succeed (Connected, no tunnel).
+ *
+ * Always force LocalDNS + sniffing for full-device Xray tunnels. FakeDNS stays user-controlled
+ * except when Tor already forced it off via [torEffectiveSettings].
+ */
+fun AppSettings.tunDnsEffectiveSettings(): AppSettings {
+    if (tor.enabled) return torEffectiveSettings()
+    if (enableLocalDns && enableSniffing) return this
+    return copy(enableLocalDns = true, enableSniffing = true)
+}
+
 /** Portable, intentionally unencrypted backup payload. UI must warn before export or restore. */
 @Serializable
 data class BackupData(

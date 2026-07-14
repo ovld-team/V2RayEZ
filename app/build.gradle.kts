@@ -47,8 +47,8 @@ android {
         applicationId = "com.v2rayez.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 98
-        versionName = "0.9.98"
+        versionCode = 100
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -66,7 +66,7 @@ android {
         buildConfigField(
             "String",
             "ADDONS_RELEASE_TAG",
-            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v0.9.98")}\""
+            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v1.0.0")}\""
         )
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsnBuildConfig\"")
 

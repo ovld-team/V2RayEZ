@@ -45,6 +45,7 @@ import com.v2rayez.app.domain.model.ProxyCoreType
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.ServerGroup
 import com.v2rayez.app.domain.model.torEffectiveSettings
+import com.v2rayez.app.domain.model.tunDnsEffectiveSettings
 import com.v2rayez.app.data.repository.logCore
 import com.v2rayez.app.data.repository.logVpn
 import com.v2rayez.app.domain.repository.LogRepository
@@ -252,6 +253,8 @@ class V2RayVpnService : VpnService() {
             else -> {
                 // ACTION_CONNECT or always-on start (null intent) -> connect requested/last server.
                 val serverId = intent?.getStringExtra(EXTRA_SERVER_ID)
+                // Immediate CONNECTING UI for reconnect taps (per-app / SNI banners).
+                stateHolder.connectionState.value.server?.let { stateHolder.setConnecting(it) }
                 connectJob?.cancel()
                 val gen = connectGeneration.incrementAndGet()
                 connectJob = scope.launch { startTunnel(serverId, gen) }
@@ -302,8 +305,11 @@ class V2RayVpnService : VpnService() {
                     ?: activeXraySocksPort
                 if (port in 1..65535) java.net.InetSocketAddress("127.0.0.1", port) else null
             }
-            val settings = settingsRepository.current().torEffectiveSettings()
+            val settings = settingsRepository.current().tunDnsEffectiveSettings()
             phase("settings")
+            if (settings.enableLocalDns && !settingsRepository.current().enableLocalDns) {
+                log(LogLevel.INFO, "TUN DNS: forcing LocalDNS+sniff so apps resolve through Xray")
+            }
             // Foreground service still requires a notification; honor the user's choice by using
             // the silent channel instead of a fully-alerting ongoing notification.
             notificationsEnabled = settings.notifications
@@ -1174,9 +1180,15 @@ class V2RayVpnService : VpnService() {
         configurePerApp(builder, settings)
 
         return runCatching {
-            // Non-blocking matches hev/UAC; gVisor also expects a non-blocking fd.
-            builder.setBlocking(false)
+            // API 29+: non-blocking matches hev/UAC; gVisor expects a non-blocking fd.
+            // Calling these on API 26–28 throws and used to abort establish() entirely.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                builder.setBlocking(false)
+                runCatching { builder.setMetered(false) }
+            }
             builder.establish()
+        }.onFailure {
+            log(LogLevel.ERROR, "TUN establish failed: ${it.message ?: it.javaClass.simpleName}")
         }.getOrNull()
     }
 
