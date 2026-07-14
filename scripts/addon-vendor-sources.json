@@ -1,15 +1,15 @@
 {
-  "_instructions": "Set a direct HTTPS executable URL and its SHA-256 for each ABI that upstream publishes. Empty entries are intentional placeholders and are skipped. The release workflow renames downloads to the binaryName and scripts/pack-addons.sh creates the app-facing ZIP.",
+  "_instructions": "Each source is a checksum-pinned HTTPS executable or ZIP containing binaryName. Empty entries are skipped. The release workflow stages the binary and scripts/pack-addons.sh creates the app-facing ZIP.",
   "vendors": [
     {
       "packId": "psiphon",
       "binaryName": "psiphon-tunnel-core",
       "upstream": "https://github.com/Psiphon-Labs/psiphon-tunnel-core",
       "sources": {
-        "arm64-v8a": { "url": "", "sha256": "" },
-        "armeabi-v7a": { "url": "", "sha256": "" },
-        "x86": { "url": "", "sha256": "" },
-        "x86_64": { "url": "", "sha256": "" }
+        "arm64-v8a": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/psiphon-arm64-v8a.zip", "sha256": "3b6dcc5a5a9c30611add3f9d06753d12c424d9aee4b2de86729d4f6a6dd91de1", "format": "zip" },
+        "armeabi-v7a": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/psiphon-armeabi-v7a.zip", "sha256": "ad6fbe571698fdae900158efb86fde64bfe973d5b79668f073fe54ff4ad06f01", "format": "zip" },
+        "x86": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/psiphon-x86.zip", "sha256": "6afe0334a5132655df0858e9bdad16a8e13a7b485c595490d1836e2d1519596b", "format": "zip" },
+        "x86_64": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/psiphon-x86_64.zip", "sha256": "48829b8c49287dd51b32f70601cdd001d7a6b541f92a1c7dd4deebc7db6cb21e", "format": "zip" }
       }
     },
     {
@@ -17,10 +17,10 @@
       "binaryName": "dnstt",
       "upstream": "https://www.bamsoftware.com/software/dnstt/",
       "sources": {
-        "arm64-v8a": { "url": "", "sha256": "" },
-        "armeabi-v7a": { "url": "", "sha256": "" },
-        "x86": { "url": "", "sha256": "" },
-        "x86_64": { "url": "", "sha256": "" }
+        "arm64-v8a": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/dnstunnel-arm64-v8a.zip", "sha256": "50511a471b49dc552080b3508bdbbda8f517e3bb73e97b6894e6b94980dd034b", "format": "zip" },
+        "armeabi-v7a": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/dnstunnel-armeabi-v7a.zip", "sha256": "7ceb3e35ead117c8afdb5764b52e8fdceafc0c762fe01a4f373c1ee61b6570d7", "format": "zip" },
+        "x86": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/dnstunnel-x86.zip", "sha256": "075d13236132109e36a14a18a44ba9279c7a904e5b1ebc3b6ed9379b0e62d5d1", "format": "zip" },
+        "x86_64": { "url": "https://github.com/ovld-team/V2RayEZ/releases/download/V2RayEZ-v0.9.98/dnstunnel-x86_64.zip", "sha256": "fa059d836deb32a99d3284db06bf0e34e96ad03789e918282bc6238f869394ea", "format": "zip" }
       }
     }
   ]

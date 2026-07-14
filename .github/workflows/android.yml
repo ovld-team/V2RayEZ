@@ -132,10 +132,10 @@ jobs:
             | $vendor.sources
             | to_entries[]
             | select(.value.url != "")
-            | [$vendor.packId, $vendor.binaryName, .key, .value.url, .value.sha256]
+            | [$vendor.packId, $vendor.binaryName, .key, .value.url, .value.sha256, (.value.format // "executable")]
             | @tsv
           ' "$MANIFEST" |
-          while IFS=$'\t' read -r pack_id binary_name abi url sha256; do
+          while IFS=$'\t' read -r pack_id binary_name abi url sha256 format; do
             if [[ ! "$url" =~ ^https:// ]]; then
               echo "error: $pack_id/$abi source must use HTTPS" >&2
               exit 1
@@ -146,13 +146,22 @@ jobs:
             fi
 
             dest="$STAGE/$abi/$binary_name"
+            download="$RUNNER_TEMP/$pack_id-$abi.download"
             mkdir -p "$(dirname "$dest")"
-            curl --fail --location --retry 3 --proto '=https' --tlsv1.2 "$url" --output "$dest"
-            actual="$(sha256sum "$dest" | awk '{print $1}')"
+            curl --fail --location --retry 3 --proto '=https' --tlsv1.2 "$url" --output "$download"
+            actual="$(sha256sum "$download" | awk '{print $1}')"
             if [[ "${actual,,}" != "${sha256,,}" ]]; then
               echo "error: checksum mismatch for $pack_id/$abi" >&2
               exit 1
             fi
+            case "$format" in
+              executable) mv "$download" "$dest" ;;
+              zip) unzip -p "$download" "$binary_name" > "$dest"; rm -f "$download" ;;
+              *)
+                echo "error: unsupported source format '$format' for $pack_id/$abi" >&2
+                exit 1
+                ;;
+            esac
             chmod +x "$dest"
             readelf -h "$dest" >/dev/null
             echo "staged $pack_id/$abi as $binary_name"
