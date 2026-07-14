@@ -3,6 +3,8 @@ package com.v2rayez.app.data.core
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.v2rayez.app.data.analytics.FailureCategory
+import com.v2rayez.app.data.analytics.RemoteTelemetry
 import com.v2rayez.app.data.download.DownloadOutcome
 import com.v2rayez.app.data.download.DownloadTransport
 import com.v2rayez.app.domain.model.CORE_VERSION_BUNDLED
@@ -10,6 +12,9 @@ import com.v2rayez.app.domain.model.DownloadMode
 import com.v2rayez.app.domain.model.ProxyCoreType
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import java.io.BufferedReader
@@ -26,7 +31,8 @@ import javax.inject.Singleton
 @Singleton
 class ProcessProxyCore @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val binaryManager: CoreBinaryManager
+    private val binaryManager: CoreBinaryManager,
+    private val remoteTelemetry: RemoteTelemetry
 ) : ProxyCore {
 
     companion object {
@@ -38,8 +44,17 @@ class ProcessProxyCore @Inject constructor(
     @Volatile private var socksPort: Int = 0
     @Volatile private var lastVersion: String = "unknown"
 
+    /**
+     * Serializes `startProcess`/`stopProcess` so two concurrent callers (e.g. a stray retry
+     * racing a teardown) can't interleave `ProcessBuilder.start()` / `Process.destroy()` calls
+     * against the same [processRef] (W-06). Not reentrant — internal `*Locked` helpers must
+     * never be called except while already holding [processMutex].
+     */
+    private val processMutex = Mutex()
+
     override val type: ProxyCoreType get() = activeType
     override val isRunning: Boolean get() = processRef.get()?.isAlive == true
+    val isHealthy: Boolean get() = isRunning && socksPort in 1..65535
     override fun version(): String = lastVersion
 
     fun localSocksPort(): Int = socksPort
@@ -53,11 +68,22 @@ class ProcessProxyCore @Inject constructor(
         configText: String,
         selectedVersion: String,
         listenPort: Int
+    ): Boolean = processMutex.withLock {
+        startProcessLocked(type, configText, selectedVersion, listenPort)
+    }
+
+    private suspend fun startProcessLocked(
+        type: ProxyCoreType,
+        configText: String,
+        selectedVersion: String,
+        listenPort: Int
     ): Boolean = withContext(Dispatchers.IO) {
-        stopProcess()
+        stopProcessLocked()
         activeType = type
         val binary = binaryManager.resolveBinary(type, selectedVersion) ?: run {
-            Log.e(TAG, "No binary for $type version=$selectedVersion abi=${binaryManager.deviceAbiLabel()}")
+            val reason = "No binary for ${type.label} abi=${binaryManager.deviceAbiLabel()}"
+            Log.e(TAG, reason)
+            runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.VPN_CONNECT, reason) }
             return@withContext false
         }
         lastVersion = selectedVersion.ifBlank { CORE_VERSION_BUNDLED }
@@ -78,6 +104,12 @@ class ProcessProxyCore @Inject constructor(
             .redirectErrorStream(true)
         val proc = runCatching { pb.start() }.onFailure {
             Log.e(TAG, "Failed to start process", it)
+            runCatching {
+                remoteTelemetry.captureVpnFailure(
+                    FailureCategory.VPN_CONNECT,
+                    "${type.label} process start failed: ${it.javaClass.simpleName}"
+                )
+            }
         }.getOrNull() ?: return@withContext false
         processRef.set(proc)
         Thread({
@@ -89,26 +121,48 @@ class ProcessProxyCore @Inject constructor(
                     }
                 }
             }
+            if (processRef.compareAndSet(proc, null)) {
+                socksPort = 0
+                Log.e(TAG, "${type.label} process exited")
+            }
         }, "core-log-${type.name}").apply { isDaemon = true }.start()
 
-        Thread.sleep(400)
+        try {
+            // Cancellable (unlike the old Thread.sleep(400)): if the connect attempt is
+            // superseded/cancelled mid-wait, we still land in the catch below and kill the
+            // process we just spawned instead of leaking it as an orphaned PIE (W-07).
+            delay(400)
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            destroyQuietly(proc)
+            if (processRef.compareAndSet(proc, null)) socksPort = 0
+            throw c
+        }
         if (!proc.isAlive) {
-            Log.e(TAG, "${type.label} exited early code=${proc.exitValue()}")
+            val reason = "${type.label} exited early code=${proc.exitValue()}"
+            Log.e(TAG, reason)
             processRef.set(null)
+            socksPort = 0
+            runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.VPN_CONNECT, reason) }
             return@withContext false
         }
         true
     }
 
-    suspend fun stopProcess() = withContext(Dispatchers.IO) {
+    suspend fun stopProcess() = processMutex.withLock { stopProcessLocked() }
+
+    private suspend fun stopProcessLocked() = withContext(Dispatchers.IO) {
         val p = processRef.getAndSet(null) ?: return@withContext
+        destroyQuietly(p)
+        socksPort = 0
+    }
+
+    private fun destroyQuietly(p: Process) {
         runCatching {
             p.destroy()
             if (!p.waitFor(2, java.util.concurrent.TimeUnit.SECONDS)) {
                 p.destroyForcibly()
             }
         }
-        socksPort = 0
     }
 
     override suspend fun start(configText: String, tunFd: Int): Boolean {

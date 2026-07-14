@@ -2,9 +2,12 @@ package com.v2rayez.app.ui.screens.tools
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,7 +68,13 @@ fun ToolsScreen(onNavigate: (String) -> Unit, onOpenLogs: () -> Unit) {
             // Anti-censorship / unblock tools as a card grid (the primary reason to open Tools).
             SectionHeader(title = stringResource(R.string.tools_group_unblock))
             UNBLOCK_IDS.chunked(2).forEach { rowItems ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                // IntrinsicSize.Min + fillMaxHeight keeps both cards the same height even when
+                // one localized subtitle wraps to more lines than the other (FA/RU on compact
+                // widths), instead of the shorter card looking visibly smaller.
+                Row(
+                    Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     rowItems.forEach { id ->
                         val (title, subtitle) = toolTitleSub(id)
                         val (icon, accent) = toolVisual(id)
@@ -74,7 +83,7 @@ fun ToolsScreen(onNavigate: (String) -> Unit, onOpenLogs: () -> Unit) {
                             title = title,
                             subtitle = subtitle,
                             onClick = { onNavigate(routeFor(id)) },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             accent = accent
                         )
                     }

@@ -1,5 +1,7 @@
 import java.util.Properties
 
+import io.sentry.android.gradle.instrumentation.logcat.LogcatLevel
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -10,6 +12,8 @@ plugins {
     // Firebase light: Crashlytics + Analytics only (see google-services.json in this module).
     alias(libs.plugins.google.services)
     alias(libs.plugins.firebase.crashlytics.plugin)
+    // Logcat → Sentry Logs/breadcrumbs; keep auto-init OFF in the manifest (manual DSN init).
+    alias(libs.plugins.sentry.android.gradle)
 }
 
 val keystoreProps = Properties().apply {
@@ -40,8 +44,8 @@ android {
         applicationId = "com.v2rayez.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 80
-        versionName = "0.9.80"
+        versionCode = 95
+        versionName = "0.9.95"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -59,7 +63,7 @@ android {
         buildConfigField(
             "String",
             "ADDONS_RELEASE_TAG",
-            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v0.9.80-rc-1")}\""
+            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v0.9.95")}\""
         )
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
 
@@ -167,6 +171,42 @@ android {
     }
 }
 
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+/*
+ * Sentry Android Gradle plugin: Logcat instrumentation → breadcrumbs + Sentry Logs (when
+ * options.logs.enabled). Disable auto-upload (no SENTRY_AUTH_TOKEN in CI for mappings).
+ * Keep autoInstallation so SDK version stays aligned, but NDK stays excluded below.
+ */
+sentry {
+    includeProguardMapping.set(false)
+    autoUploadProguardMapping.set(false)
+    uploadNativeSymbols.set(false)
+    includeSourceContext.set(false)
+    includeDependenciesReport.set(false)
+    telemetry.set(false)
+    autoInstallation {
+        enabled.set(true)
+        sentryVersion.set(libs.versions.sentry.get())
+    }
+    tracingInstrumentation {
+        enabled.set(true)
+        // Performance spans stay off via tracesSampleRate=0; keep Logcat for Logs/breadcrumbs.
+        features.set(emptySet())
+        logcat {
+            enabled.set(true)
+            minLevel.set(LogcatLevel.WARNING)
+        }
+    }
+}
+
+// Ensure no resolution path can pull sentry-android-ndk (plugin auto-install, BOM, etc.).
+configurations.configureEach {
+    exclude(group = "io.sentry", module = "sentry-android-ndk")
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -194,10 +234,13 @@ dependencies {
 
     // Background work
     implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
 
     // Coroutines & serialization
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.snakeyaml.engine)
 
     // Networking & QR
     implementation(libs.okhttp)
@@ -231,6 +274,7 @@ dependencies {
 
     // Sentry without NDK preload — SentryNdkPreloadProvider has crashed cold-start on
     // older Android (API 26) when libsentry.so fails to load. Pure-Java SDK is enough.
+    // The Gradle plugin may pull integrations; configurations.all also excludes NDK.
     implementation(libs.sentry.android) {
         exclude(group = "io.sentry", module = "sentry-android-ndk")
     }

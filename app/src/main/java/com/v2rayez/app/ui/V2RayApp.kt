@@ -195,7 +195,7 @@ fun V2RayApp(
             composable(Routes.BROWSER) {
                 BrowserScreen(onOpenMitmSetup = { go(Routes.DOMAIN_FRONTING) })
             }
-            composable(Routes.STATISTICS) { StatisticsScreen() }
+            composable(Routes.STATISTICS) { StatisticsScreen(onBack = { navController.popBackStack() }) }
             composable(Routes.SETTINGS) {
                 SettingsScreen(
                     onOpenAdvancedVpn = { go(Routes.ADVANCED_VPN) },

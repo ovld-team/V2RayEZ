@@ -376,6 +376,10 @@ internal fun BrowserContent(
                     settings.javaScriptEnabled = true
                     settings.domStorageEnabled = true
                     settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                    // Align with BpbPanelScreen hardening (SEC-06) — this Browser never needs
+                    // local file:// or content:// access, only http(s) navigation.
+                    settings.allowFileAccess = false
+                    settings.allowContentAccess = false
                     // This Browser exists to verify MITM + user-CA playback (YouTube). YouTube's
                     // player calls video.play() programmatically after the watch page loads, so a
                     // gesture requirement leaves the player stuck on a spinner. Allow autoplay so
@@ -383,6 +387,11 @@ internal fun BrowserContent(
                     settings.mediaPlaybackRequiresUserGesture = false
                     CookieManager.getInstance().setAcceptCookie(true)
                     webViewClient = object : WebViewClient() {
+                        override fun shouldOverrideUrlLoading(
+                            view: WebView?,
+                            request: android.webkit.WebResourceRequest?
+                        ): Boolean = !isAllowedWebViewScheme(request?.url?.scheme)
+
                         override fun onPageFinished(view: WebView?, url: String?) {
                             canGoBack = view?.canGoBack() == true
                             canGoForward = view?.canGoForward() == true
@@ -452,6 +461,14 @@ internal fun shouldDeferInitialLoad(
     proxyRunning: Boolean,
     proxyApplied: Boolean
 ): Boolean = proxyApiSupported && proxyRunning && !proxyApplied
+
+/**
+ * Browser navigation allowlist: only `http`/`https` are safe destinations for this
+ * general-purpose WebView (SEC-06). Blocks `file://`, `content://`, `intent://`,
+ * `javascript:`, and other schemes a hostile/redirected page could pivot into once loaded.
+ */
+internal fun isAllowedWebViewScheme(scheme: String?): Boolean =
+    scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)
 
 internal fun normalizeBrowserInput(raw: String): String {
     val trimmed = raw.trim()

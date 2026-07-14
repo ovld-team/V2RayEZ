@@ -1,7 +1,9 @@
 package com.v2rayez.app.ui.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.v2rayez.app.R
 import com.v2rayez.app.data.core.AddonInstallResult
 import com.v2rayez.app.data.core.AddonPackId
 import com.v2rayez.app.data.core.AddonPackManager
@@ -17,6 +19,7 @@ import com.v2rayez.app.domain.model.ProxyCoreType
 import com.v2rayez.app.domain.repository.SettingsRepository
 import com.v2rayez.app.domain.repository.VpnController
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -31,8 +34,11 @@ class CoreManagerViewModel @Inject constructor(
     private val binaries: CoreBinaryManager,
     private val addonPacks: AddonPackManager,
     private val geoAssets: GeoAssetManager,
-    private val vpn: VpnController
+    private val vpn: VpnController,
+    @ApplicationContext private val appContext: Context
 ) : ViewModel() {
+
+    private fun str(resId: Int, vararg args: Any): String = appContext.getString(resId, *args)
 
     /**
      * Actionable suffix for a failed download: in a censored network GitHub is often blocked on
@@ -41,9 +47,9 @@ class CoreManagerViewModel @Inject constructor(
      */
     private fun downloadFailHint(): String =
         if (vpn.connectionState.value.status == ConnectionStatus.CONNECTED) {
-            " Check your connection and try again."
+            str(R.string.core_hint_check_connection)
         } else {
-            " If your network blocks GitHub, connect to a server first — downloads route through the tunnel."
+            str(R.string.core_hint_connect_first)
         }
 
     val state: StateFlow<AppSettings> =
@@ -74,15 +80,15 @@ class CoreManagerViewModel @Inject constructor(
 
     fun download(type: ProxyCoreType, release: CoreBinaryManager.RemoteRelease) = viewModelScope.launch {
         _busy.value = true
-        _status.value = "Downloading ${type.label} ${release.tag} (${release.abi})…"
+        _status.value = str(R.string.core_status_downloading, type.label, release.tag, release.abi)
         val ok = binaries.downloadAndInstall(type, release, mode = state.value.downloadMode)
         if (ok) {
             settings.update {
                 it.copy(selectedCoreVersions = it.selectedCoreVersions + (type to release.tag))
             }
-            _status.value = "Installed ${release.tag} for ${release.abi}"
+            _status.value = str(R.string.core_status_installed, release.tag, release.abi)
         } else {
-            _status.value = "Download failed (need ${binaries.deviceAbiLabel()} build).${downloadFailHint()}"
+            _status.value = str(R.string.core_status_download_failed, binaries.deviceAbiLabel(), downloadFailHint())
         }
         _busy.value = false
     }
@@ -92,35 +98,35 @@ class CoreManagerViewModel @Inject constructor(
     fun refreshRemotes(type: ProxyCoreType) = viewModelScope.launch {
         _busy.value = true
         val abi = binaries.deviceAbiLabel()
-        _status.value = "Fetching ${type.label} releases for $abi…"
+        _status.value = str(R.string.core_status_fetching, type.label, abi)
         val list = binaries.listRemoteReleases(type)
         _remote.value = _remote.value + (type to list)
         _status.value = if (list.isEmpty()) {
-            "No $abi releases found for ${type.label}"
+            str(R.string.core_status_no_releases, abi, type.label)
         } else {
-            "Found ${list.size} $abi release(s)"
+            str(R.string.core_status_found_releases, list.size, abi)
         }
         _busy.value = false
     }
 
     fun downloadLatest(type: ProxyCoreType) = viewModelScope.launch {
         if (type == ProxyCoreType.XRAY) {
-            _status.value = "Xray uses the bundled AAR — download is optional/unused for VPN"
+            _status.value = str(R.string.core_status_xray_optional)
             return@launch
         }
         _busy.value = true
         val abi = binaries.deviceAbiLabel()
-        _status.value = "Updating ${type.label} latest for $abi…"
+        _status.value = str(R.string.core_status_updating, type.label, abi)
         val release = binaries.downloadLatest(type, mode = state.value.downloadMode)
         if (release != null) {
             settings.update {
                 it.copy(selectedCoreVersions = it.selectedCoreVersions + (type to release.tag))
             }
-            _status.value = "Updated to ${release.tag} ($abi)"
+            _status.value = str(R.string.core_status_updated, release.tag, abi)
             val remotes = binaries.listRemoteReleases(type)
             _remote.value = _remote.value + (type to remotes)
         } else {
-            _status.value = "Update failed — no runnable $abi build.${downloadFailHint()}"
+            _status.value = str(R.string.core_status_update_failed, abi, downloadFailHint())
         }
         _busy.value = false
     }
@@ -136,7 +142,7 @@ class CoreManagerViewModel @Inject constructor(
                 it.copy(selectedCoreVersions = it.selectedCoreVersions + (type to CORE_VERSION_BUNDLED))
             } else it
         }
-        _status.value = "Deleted $version"
+        _status.value = str(R.string.core_status_deleted_version, version)
     }
 
     // ---------------------------------------------------------------- Add-on packs
@@ -177,18 +183,21 @@ class CoreManagerViewModel @Inject constructor(
         val release = addonPacks.resolveRelease(packId)
         if (release == null) {
             queueAddonInternal(packId)
-            _status.value =
-                "Queued ${packId.label} — publish `${packId.name.lowercase()}-<abi>.zip` on " +
-                    "${com.v2rayez.app.BuildConfig.ADDONS_GITHUB_REPO} Releases, then Install again"
+            _status.value = str(
+                R.string.core_status_addon_queued_publish,
+                packId.label,
+                packId.name.lowercase(),
+                com.v2rayez.app.BuildConfig.ADDONS_GITHUB_REPO
+            )
         } else {
-            _status.value = "Downloading ${packId.label} ${release.version} (${release.abi})…"
+            _status.value = str(R.string.core_status_addon_downloading, packId.label, release.version, release.abi)
             when (val r = addonPacks.install(release, state.value.downloadMode)) {
                 is AddonInstallResult.Success -> {
                     settings.update { it.copy(pendingAddonInstall = it.pendingAddonInstall.filterNot { id -> id.equals(packId.name, ignoreCase = true) }) }
-                    _status.value = "Installed ${packId.label} ${r.version}"
+                    _status.value = str(R.string.core_status_addon_installed, packId.label, r.version)
                 }
                 is AddonInstallResult.Failed ->
-                    _status.value = "Install failed for ${packId.label}: ${r.reason}.${downloadFailHint()}"
+                    _status.value = str(R.string.core_status_addon_install_failed, packId.label, r.reason, downloadFailHint())
             }
         }
         _busy.value = false
@@ -197,13 +206,13 @@ class CoreManagerViewModel @Inject constructor(
     /** Remove [packId] from the pending-install queue. */
     fun cancelAddon(packId: AddonPackId) = viewModelScope.launch {
         settings.update { it.copy(pendingAddonInstall = it.pendingAddonInstall.filterNot { id -> id.equals(packId.name, ignoreCase = true) }) }
-        _status.value = "Removed ${packId.label} from install queue"
+        _status.value = str(R.string.core_status_addon_removed, packId.label)
     }
 
     /** Delete every downloaded version of [packId] from `filesDir/addons/`. */
     fun deleteAddon(packId: AddonPackId) = viewModelScope.launch {
         addonPacks.deleteAll(packId)
-        _status.value = "Deleted ${packId.label} download"
+        _status.value = str(R.string.core_status_addon_deleted, packId.label)
     }
 
     // ---------------------------------------------------------------- Geo routing data
@@ -217,19 +226,18 @@ class CoreManagerViewModel @Inject constructor(
 
     fun downloadGeo() = viewModelScope.launch {
         _busy.value = true
-        _status.value = "Downloading geo routing databases…"
+        _status.value = str(R.string.core_status_geo_downloading)
         _status.value = when (val r = geoAssets.download(mode = state.value.downloadMode)) {
             is GeoInstallResult.Success ->
-                "Installed geo data (geoip %.1f MB, geosite %.1f MB) — applies on next connect"
-                    .format(r.geoipBytes / 1_048_576.0, r.geositeBytes / 1_048_576.0)
-            is GeoInstallResult.Failed -> "Geo data download failed: ${r.reason}.${downloadFailHint()}"
+                str(R.string.core_status_geo_installed, r.geoipBytes / 1_048_576.0, r.geositeBytes / 1_048_576.0)
+            is GeoInstallResult.Failed -> str(R.string.core_status_geo_download_failed, r.reason, downloadFailHint())
         }
         _busy.value = false
     }
 
     fun deleteGeo() = viewModelScope.launch {
         geoAssets.delete()
-        _status.value = "Deleted full geo data — mini geoip (LAN/CN) restored"
+        _status.value = str(R.string.core_status_geo_deleted)
     }
 
     private suspend fun queueAddonInternal(packId: AddonPackId) {
@@ -243,6 +251,29 @@ class CoreManagerViewModel @Inject constructor(
         val pending = settings.current().pendingAddonInstall.toList()
         if (pending.isEmpty()) return@launch
         for (id in pending) {
+            val coreType = when (id.lowercase().replace('_', '-')) {
+                "sing-box", "singbox" -> ProxyCoreType.SING_BOX
+                "mihomo", "clash" -> ProxyCoreType.CLASH
+                else -> null
+            }
+            if (coreType != null) {
+                _busy.value = true
+                _status.value = str(R.string.core_status_addon_installing_queued, coreType.label, binaries.deviceAbiLabel())
+                val release = binaries.downloadLatest(coreType, mode = settings.current().downloadMode)
+                if (release != null) {
+                    settings.update {
+                        it.copy(
+                            selectedCoreVersions = it.selectedCoreVersions + (coreType to release.tag),
+                            pendingAddonInstall = it.pendingAddonInstall.filterNot { x -> x.equals(id, true) }
+                        )
+                    }
+                    _status.value = str(R.string.core_status_addon_installed_queued, coreType.label, release.tag)
+                } else {
+                    _status.value = str(R.string.core_status_addon_queued_failed, coreType.label, downloadFailHint())
+                }
+                _busy.value = false
+                continue
+            }
             val pack = AddonPackId.fromId(id) ?: continue
             if (addonPacks.isAvailable(pack) && addonPacks.packSource(pack) == PackSource.DOWNLOADED) {
                 settings.update {

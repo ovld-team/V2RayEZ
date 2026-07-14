@@ -3,5 +3,5 @@
     <cache-path name="logs" path="logs/" />
     <cache-path name="mitm-pack" path="mitm-pack/" />
     <cache-path name="mitm-certs" path="mitm-certs/" />
-    <files-path name="files" path="." />
+    <cache-path name="exports" path="exports/" />
 </paths>

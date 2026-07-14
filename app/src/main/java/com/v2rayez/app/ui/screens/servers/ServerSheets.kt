@@ -529,7 +529,7 @@ fun QrShareSheet(title: String, content: String, onDismiss: () -> Unit) {
             if (bitmap != null) {
                 androidx.compose.foundation.Image(
                     bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "QR code",
+                    contentDescription = stringResource(R.string.action_qr_code),
                     modifier = Modifier.size(260.dp)
                 )
             } else {

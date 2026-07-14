@@ -65,6 +65,10 @@ data class Server(
     val password: String = "",
     /** Shadowsocks cipher method. */
     val method: String = "",
+    /** SIP003 Shadowsocks plugin name, e.g. `v2ray-plugin` or `obfs-local`. */
+    val ssPlugin: String = "",
+    /** SIP003 semicolon-delimited plugin options (without the plugin name). */
+    val ssPluginOptions: String = "",
     /** VMESS alterId (0 for AEAD). */
     val alterId: Int = 0,
     /** VLESS xtls flow (e.g. "xtls-rprx-vision"). */
@@ -107,6 +111,8 @@ data class Server(
     val wgPreSharedKey: String = "",
     /** Assigned interface addresses, e.g. "10.0.0.2/32". */
     val wgLocalAddresses: List<String> = emptyList(),
+    /** Peer routes preserved from WireGuard `AllowedIPs` / share links. */
+    val wgAllowedIps: List<String> = listOf("0.0.0.0/0", "::/0"),
     /** Optional 3-byte Cloudflare-style reserved bytes. */
     val wgReserved: List<Int> = emptyList(),
     /** WireGuard MTU (0 = core default). */

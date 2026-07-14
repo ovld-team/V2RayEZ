@@ -78,6 +78,7 @@ import com.v2rayez.app.R
 import com.v2rayez.app.data.sni.SniScanResult
 import com.v2rayez.app.data.tor.TorState
 import com.v2rayez.app.data.tor.TorStatus
+import com.v2rayez.app.domain.model.ConnectionStatus
 import com.v2rayez.app.domain.model.DesyncMode
 import com.v2rayez.app.domain.model.RoutingMode
 import com.v2rayez.app.domain.model.RoutingRule
@@ -89,6 +90,7 @@ import com.v2rayez.app.domain.model.TorTransport
 import com.v2rayez.app.ui.components.CardSurface
 import com.v2rayez.app.ui.components.HSpacer
 import com.v2rayez.app.ui.components.PrimaryButton
+import com.v2rayez.app.ui.components.ReconnectBanner
 import com.v2rayez.app.ui.components.SectionHeader
 import com.v2rayez.app.ui.components.SettingSwitchRow
 import com.v2rayez.app.ui.components.V2BackTopBar
@@ -508,6 +510,7 @@ fun AppProxyScreen(
     toolsViewModel: ToolsViewModel = hiltViewModel()
 ) {
     val s by viewModel.state.collectAsState()
+    val conn by viewModel.connectionState.collectAsState()
     val apps by toolsViewModel.apps.collectAsState()
     val loading by toolsViewModel.appsLoading.collectAsState()
     LaunchedEffect(Unit) { toolsViewModel.loadApps() }
@@ -518,6 +521,7 @@ fun AppProxyScreen(
         if (q.isBlank()) apps
         else apps.filter { it.label.contains(q, true) || it.packageName.contains(q, true) }
     }
+    val vpnUp = conn.status == ConnectionStatus.CONNECTED || conn.status == ConnectionStatus.CONNECTING
 
     Column(Modifier.fillMaxSize()) {
         V2BackTopBar(title = stringResource(R.string.appproxy_title), onBack = onBack)
@@ -547,6 +551,14 @@ fun AppProxyScreen(
                         )
                     }
                 }
+            }
+            if (vpnUp && s.appProxy.enabled) {
+                VSpacer(8)
+                ReconnectBanner(
+                    hint = stringResource(R.string.appproxy_reconnect_hint),
+                    actionLabel = stringResource(R.string.settings_reconnect_now),
+                    onReconnect = viewModel::reconnectVpn
+                )
             }
             VSpacer(8)
             OutlinedTextField(
@@ -675,24 +687,11 @@ fun SniTunnelScreen(onBack: () -> Unit, viewModel: com.v2rayez.app.ui.viewmodel.
 
         // Reconnect prompt: SNI/desync changes only take effect on the next connection.
         if (connected) {
-            CardSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null, tint = Warning, modifier = Modifier.size(18.dp))
-                    HSpacer(10)
-                    Text(
-                        stringResource(R.string.sni_reconnect_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = viewModel::reconnect) {
-                        Text(stringResource(R.string.sni_reconnect_now))
-                    }
-                }
-            }
+            ReconnectBanner(
+                hint = stringResource(R.string.sni_reconnect_hint),
+                actionLabel = stringResource(R.string.sni_reconnect_now),
+                onReconnect = viewModel::reconnect
+            )
             VSpacer(12)
         }
 

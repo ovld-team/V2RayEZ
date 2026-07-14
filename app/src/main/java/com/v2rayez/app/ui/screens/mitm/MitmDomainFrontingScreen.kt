@@ -267,7 +267,7 @@ internal fun MitmDomainFrontingContent(
                     AnimatedVisibility(visible = guideExpanded) {
                         Column(Modifier.padding(top = 8.dp)) {
                             val steps = remember {
-                                com.v2rayez.app.data.cert.MitmCaInstallHelper.installGuideSteps()
+                                com.v2rayez.app.data.cert.MitmCaInstallHelper.installGuideSteps(context)
                             }
                             steps.forEach { step ->
                                 Text(step.title, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)

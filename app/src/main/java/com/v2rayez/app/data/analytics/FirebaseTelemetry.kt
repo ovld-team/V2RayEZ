@@ -45,7 +45,7 @@ class FirebaseTelemetry @Inject constructor(
 
     fun recordFatal(t: Throwable) {
         runCatching {
-            crashlytics?.recordException(t)
+            crashlytics?.recordException(sanitizedForCrashlytics(t))
             crashlytics?.sendUnsentReports()
         }
     }
@@ -88,13 +88,46 @@ class FirebaseTelemetry @Inject constructor(
     fun recordNonFatal(tag: String, t: Throwable) {
         runCatching {
             crashlytics?.log(tag.take(64))
-            crashlytics?.recordException(t)
+            crashlytics?.recordException(sanitizedForCrashlytics(t))
         }
     }
 
     private companion object {
         const val TAG = "FirebaseTelemetry"
     }
+}
+
+private const val MAX_CAUSE_DEPTH = 5
+
+/**
+ * Crashlytics has no `beforeSend` hook like Sentry's — [RemoteTelemetry]/[PiiScrubber] never
+ * sees this stream, so scrub [Throwable.message] (and its cause chain) at the call site before
+ * it ever reaches Crashlytics (14-P0-1). Preserves the original exception type and stack trace
+ * for crash grouping when a `(String)` constructor exists; falls back to a generic
+ * [RuntimeException] otherwise. Returns [t] unchanged when nothing needed scrubbing.
+ *
+ * Cause chains deeper than [MAX_CAUSE_DEPTH] are truncated (dropped), never attached unscrubbed
+ * — this level's own message is still scrubbed either way, so no raw PII survives at any depth.
+ *
+ * Pure (no Android/Firebase deps) so it's directly unit-testable, like [PiiScrubber] itself.
+ */
+internal fun sanitizedForCrashlytics(t: Throwable, depth: Int = 0): Throwable {
+    val originalCause = t.cause?.takeIf { it !== t }
+    val sanitizedCause = when {
+        originalCause == null -> null
+        depth >= MAX_CAUSE_DEPTH -> null // truncate rather than attach an unscrubbed deep cause
+        else -> sanitizedForCrashlytics(originalCause, depth + 1)
+    }
+    val causeChanged = sanitizedCause !== originalCause
+    val originalMessage = t.message
+    val scrubbedMessage = PiiScrubber.scrubOrNull(originalMessage)
+    if (scrubbedMessage == originalMessage && !causeChanged) return t
+    val rebuilt = runCatching {
+        t.javaClass.getConstructor(String::class.java).newInstance(scrubbedMessage) as Throwable
+    }.getOrElse { RuntimeException(scrubbedMessage) }
+    rebuilt.stackTrace = t.stackTrace
+    if (sanitizedCause != null) runCatching { rebuilt.initCause(sanitizedCause) }
+    return rebuilt
 }
 
 /** Local ring buffer for Device Lab / offline (no network). */

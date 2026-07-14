@@ -29,6 +29,15 @@
     <string name="action_filter">Фильтр</string>
     <string name="action_back">Назад</string>
     <string name="action_add">Добавить</string>
+    <string name="action_more">Ещё</string>
+    <string name="action_copy_address">Скопировать адрес</string>
+    <string name="action_close_scanner">Закрыть сканер</string>
+    <string name="action_switch_camera">Переключить камеру</string>
+    <string name="action_flashlight_on">Включить фонарик</string>
+    <string name="action_flashlight_off">Выключить фонарик</string>
+    <string name="action_qr_code">QR-код</string>
+    <string name="qr_scan_prompt">Наведите QR-код в рамку</string>
+    <string name="qr_camera_permission_required">Для сканирования QR-кода требуется доступ к камере.</string>
 
     <!-- Servers -->
     <string name="servers_title">Серверы</string>
@@ -116,6 +125,7 @@
     <string name="home_select_server">Выберите сервер для подключения</string>
     <string name="home_premium">Премиум</string>
     <string name="home_assets">Ресурсы</string>
+    <string name="home_open_core_manager">Открыть Менеджер ядер</string>
     <string name="home_notifications">Уведомления</string>
     <string name="home_toggle_connection">Переключить подключение</string>
     <string name="home_traffic">Трафик</string>
@@ -341,7 +351,9 @@
     <string name="core_version_bundled">В комплекте</string>
     <string name="core_fetch_releases">Список релизов</string>
     <string name="core_update_latest">Обновить до последней</string>
-    <string name="core_bundled_missing">Встроенный бинарник недоступен на %1$s — скачайте релиз для этой ABI</string>
+    <string name="core_bundled_missing">Не включён в этот APK для %1$s — скачайте релиз в Менеджере ядер</string>
+    <string name="core_download_only_hint">sing-box и mihomo только скачиваются (не в APK), чтобы установка оставалась компактной.</string>
+    <string name="appproxy_reconnect_hint">Изменения прокси по приложениям применятся после переподключения VPN</string>
     <string name="core_download">Скачать</string>
     <string name="core_delete">Удалить</string>
     <string name="core_busy">Работаю…</string>
@@ -363,6 +375,32 @@
     <string name="core_addon_queued">В очереди — установится, когда появится источник релизов</string>
     <string name="core_addon_cancel">Отмена</string>
     <string name="core_addon_delete">Удалить</string>
+    <string name="core_hint_check_connection">Проверьте подключение и попробуйте снова.</string>
+    <string name="core_hint_connect_first">Если ваша сеть блокирует GitHub, сначала подключитесь к серверу — загрузки пойдут через туннель.</string>
+    <string name="core_status_downloading">Загрузка %1$s %2$s (%3$s)…</string>
+    <string name="core_status_installed">Установлено %1$s для %2$s</string>
+    <string name="core_status_download_failed">Загрузка не удалась (нужна сборка %1$s). %2$s</string>
+    <string name="core_status_fetching">Получение релизов %1$s для %2$s…</string>
+    <string name="core_status_no_releases">Релизы %1$s для %2$s не найдены</string>
+    <string name="core_status_found_releases">Найдено %1$d релиз(ов) %2$s</string>
+    <string name="core_status_xray_optional">Xray использует встроенный AAR — загрузка необязательна и не используется для VPN</string>
+    <string name="core_status_updating">Обновление %1$s (последняя версия) для %2$s…</string>
+    <string name="core_status_updated">Обновлено до %1$s (%2$s)</string>
+    <string name="core_status_update_failed">Обновление не удалось — нет рабочей сборки %1$s. %2$s</string>
+    <string name="core_status_deleted_version">Удалено %1$s</string>
+    <string name="core_status_addon_queued_publish">%1$s в очереди — опубликуйте `%2$s-&lt;abi&gt;.zip` в релизах %3$s, затем установите снова</string>
+    <string name="core_status_addon_downloading">Загрузка %1$s %2$s (%3$s)…</string>
+    <string name="core_status_addon_installed">Установлено %1$s %2$s</string>
+    <string name="core_status_addon_install_failed">Ошибка установки %1$s: %2$s. %3$s</string>
+    <string name="core_status_addon_removed">%1$s удалён из очереди установки</string>
+    <string name="core_status_addon_deleted">Загрузка %1$s удалена</string>
+    <string name="core_status_geo_downloading">Загрузка баз геомаршрутизации…</string>
+    <string name="core_status_geo_installed">Гео-данные установлены (geoip %1$.1f МБ, geosite %2$.1f МБ) — применится при следующем подключении</string>
+    <string name="core_status_geo_download_failed">Загрузка гео-данных не удалась: %1$s. %2$s</string>
+    <string name="core_status_geo_deleted">Полные гео-данные удалены — восстановлен мини geoip (LAN/CN)</string>
+    <string name="core_status_addon_installing_queued">Установка %1$s из очереди для %2$s…</string>
+    <string name="core_status_addon_installed_queued">Установлено из очереди %1$s %2$s</string>
+    <string name="core_status_addon_queued_failed">Установка %1$s из очереди не удалась. %2$s</string>
     <string name="server_preferred_core">Прокси-ядро</string>
     <string name="tor_autosetup_ok">Tor подключён</string>
     <string name="tor_autosetup_failed">Не удалось настроить Tor — повторите или добавьте мосты</string>
@@ -446,6 +484,14 @@
     <string name="logs_export_chooser">Экспорт журналов</string>
     <string name="logs_clear">Очистить</string>
     <string name="logs_auto_scroll">Автопрокрутка</string>
+    <string name="logs_search_hint">Поиск в журнале…</string>
+    <string name="logs_empty">Записей пока нет.</string>
+
+    <!-- Charts -->
+    <string name="chart_peak">пик %1$s</string>
+    <string name="chart_no_traffic">Нет трафика за этот период</string>
+    <string name="chart_summary_traffic">График трафика: скачано %1$s, отправлено %2$s</string>
+    <string name="chart_summary_live">Текущая скорость: %1$s загрузка, %2$s отдача</string>
 
     <!-- Servers (additional) -->
     <string name="servers_all">Все</string>
@@ -542,6 +588,23 @@
     <string name="editor_encryption">Шифрование (scy)</string>
     <string name="editor_reality_pbk">Публичный ключ Reality (pbk)</string>
     <string name="editor_reality_sid">shortId Reality (sid)</string>
+    <string name="editor_ss_plugin">Плагин SIP003</string>
+    <string name="editor_ss_plugin_options">Параметры плагина</string>
+    <string name="editor_ssh_user">Имя пользователя SSH</string>
+    <string name="editor_ssh_private_key">Закрытый ключ SSH (PEM)</string>
+    <string name="editor_ssh_host_key">Закреплённый ключ хоста SSH</string>
+    <string name="editor_wg_private_key">Закрытый ключ WireGuard</string>
+    <string name="editor_wg_public_key">Публичный ключ пира</string>
+    <string name="editor_wg_preshared_key">Предварительный ключ (необязательно)</string>
+    <string name="editor_wg_addresses">Адреса интерфейса (через запятую)</string>
+    <string name="editor_wg_allowed_ips">Разрешённые IP (через запятую)</string>
+    <string name="editor_wg_reserved">Резервные байты (через запятую)</string>
+    <string name="editor_wg_mtu">MTU (необязательно)</string>
+    <string name="editor_dns_domain">Домен DNS-туннеля</string>
+    <string name="editor_dns_public_key">Публичный ключ DNS-туннеля</string>
+    <string name="editor_dns_resolver">URL или адрес резолвера</string>
+    <string name="editor_dns_mode">Режим резолвера (doh, dot, udp)</string>
+    <string name="editor_psiphon_config">Конфигурация Psiphon JSON</string>
     <string name="editor_allow_insecure_sub">Пропуск проверки сертификата (не рекомендуется)</string>
     <string name="editor_chain">Цепочка / фронт-прокси</string>
     <string name="editor_chain_desc">Подключаться к этому серверу через другой (этот -&gt; фронт -&gt; интернет).</string>
@@ -560,6 +623,14 @@
     <string name="settings_backup_saved">Резервная копия сохранена</string>
     <string name="settings_backup_failed">Не удалось создать копию</string>
     <string name="settings_restore_failed">Не удалось восстановить</string>
+    <string name="settings_backup_confirm_title">Экспортировать незашифрованную копию?</string>
+    <string name="settings_backup_credential_warning">Этот JSON-файл содержит учётные данные серверов, закрытые ключи, настройки и URL подписок без шифрования. Сохраняйте его только в доверенном месте.</string>
+    <string name="settings_backup_confirm">Всё равно экспортировать</string>
+    <string name="settings_restore_confirm_title">Восстановить конфиденциальную копию?</string>
+    <string name="settings_restore_credential_warning">Восстанавливайте только доверенную копию. Она может заменить настройки и импортировать учётные данные и URL подписок.</string>
+    <string name="settings_restore_confirm">Выбрать файл</string>
+    <string name="servers_share_confirm_title">Поделиться учётными данными сервера?</string>
+    <string name="servers_share_credential_warning">Эта ссылка содержит учётные данные, дающие доступ к серверу. Отправляйте её только доверенному получателю.</string>
     <string name="settings_accent_title">Акцентный цвет</string>
 
     <!-- Common -->
@@ -713,7 +784,15 @@
     <string name="wizard_want_browser">Вкладка браузера</string>
     <string name="wizard_want_hotspot">Хотспот / LAN</string>
     <string name="wizard_want_cores">Ядра sing-box / Clash Meta</string>
-    <string name="wizard_want_analytics">Помогать улучшать V2RayEz (анонимная аналитика)</string>
+    <string name="wizard_want_analytics">Помогать улучшать V2RayEz</string>
+    <string name="wizard_want_tor_desc">Маршрутизация трафика через мосты Tor для анонимности.</string>
+    <string name="wizard_want_mitm_desc">Обход блокировок через MITM-прокси и domain fronting.</string>
+    <string name="wizard_want_browser_desc">Приватный просмотр через встроенную вкладку браузера.</string>
+    <string name="wizard_want_hotspot_desc">Делитесь защищённым соединением через Wi-Fi или LAN.</string>
+    <string name="wizard_want_cores_desc">Откройте sing-box и Clash Meta как альтернативные ядра.</string>
+    <string name="wizard_want_analytics_desc">Только анонимные данные — никогда личная информация.</string>
+    <string name="wizard_wants_selected_count">%1$d из %2$d выбрано</string>
+    <string name="wizard_wants_optional_label">Опционально</string>
     <string name="wizard_welcome_subtitle">Современный клиент VLESS, VMess, Trojan и Shadowsocks для Android.</string>
     <string name="wizard_features_title">Что вы получаете</string>
     <string name="wizard_features_subtitle">Всё необходимое для собственного прокси-туннеля.</string>
@@ -876,6 +955,25 @@
     <string name="mitm_doh_host">Хост DoH</string>
     <string name="mitm_open_browser">Открыть браузер</string>
     <string name="mitm_open_certificates">Менеджер сертификатов</string>
+    <string name="mitm_ca_enable_requires_install">Создайте сертификат, установите его, затем подтвердите установку перед включением.</string>
+    <string name="mitm_ca_capture_requires_install">Создайте сертификат, установите его, затем подтвердите установку перед туннелированием устройства.</string>
+    <string name="mitm_ca_generated">Сертификат создан</string>
+    <string name="mitm_ca_imported">Сертификат импортирован</string>
+    <string name="mitm_ca_saved_downloads">Сохранено в Downloads как %1$s</string>
+    <string name="mitm_ca_save_failed">Не удалось сохранить в Downloads — используйте «Поделиться сертификатом»</string>
+    <string name="mitm_import_paste_both">Вставьте и сертификат, и приватный ключ</string>
+    <string name="mitm_guide_gen_title">Создать локальный CA</string>
+    <string name="mitm_guide_gen_body">V2RayEz создаёт приватный корневой сертификат на этом устройстве. Приватный ключ никогда не покидает телефон.</string>
+    <string name="mitm_guide_save_title">Сохранить или открыть файл сертификата</string>
+    <string name="mitm_guide_save_body">Android 11+ блокирует установку CA из приложения. Нажмите «Установить», чтобы открыть сертификат, или «Сохранить в Downloads» (%1$s).</string>
+    <string name="mitm_guide_settings_title">Установка через настройки</string>
+    <string name="mitm_guide_settings_body">Настройки → Безопасность → Шифрование и учётные данные → Установить сертификат → Сертификат ЦС. Выберите %1$s (или файл .cer). Подтвердите PIN-кодом/графическим ключом.</string>
+    <string name="mitm_guide_tap_install_title">Нажмите «Установить» на этом устройстве</string>
+    <string name="mitm_guide_tap_install_body">Android запросит PIN/графический ключ/биометрию, затем покажет «%1$s». Подтвердите добавление.</string>
+    <string name="mitm_guide_verify_title">Проверьте в разделе USER-сертификатов</string>
+    <string name="mitm_guide_verify_body">Настройки → Безопасность → Доверенные сертификаты → USER должен содержать «%1$s».</string>
+    <string name="mitm_guide_confirm_title">Подтвердите в V2RayEz</string>
+    <string name="mitm_guide_confirm_body">В разделе «Доменный фронтинг» отметьте «Я установил его», затем включите фронтинг.</string>
     <string name="sni_front_title">SNI Front Dialer</string>
     <string name="sni_front_tool_sub">Dialer с фейковым SNI и пробами ClientHello</string>
     <string name="settings_statistics">Статистика</string>

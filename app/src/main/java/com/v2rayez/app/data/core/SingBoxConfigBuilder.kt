@@ -80,7 +80,9 @@ object SingBoxConfigBuilder {
                 put("port", server.port)
                 put("public_key", server.wgPeerPublicKey)
                 if (server.wgPreSharedKey.isNotBlank()) put("pre_shared_key", server.wgPreSharedKey)
-                putJsonArray("allowed_ips") { add("0.0.0.0/0"); add("::/0") }
+                putJsonArray("allowed_ips") {
+                    server.wgAllowedIps.ifEmpty { listOf("0.0.0.0/0", "::/0") }.forEach { add(it) }
+                }
                 if (server.wgReserved.isNotEmpty()) {
                     putJsonArray("reserved") { server.wgReserved.forEach { add(JsonPrimitive(it)) } }
                 }
@@ -132,6 +134,8 @@ object SingBoxConfigBuilder {
                 put("server_port", server.port)
                 put("method", server.method)
                 put("password", server.password)
+                if (server.ssPlugin.isNotBlank()) put("plugin", server.ssPlugin)
+                if (server.ssPluginOptions.isNotBlank()) put("plugin_opts", server.ssPluginOptions)
             }
             Protocol.SSH -> {
                 put("type", "ssh")

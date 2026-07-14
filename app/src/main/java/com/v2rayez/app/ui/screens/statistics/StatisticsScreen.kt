@@ -50,7 +50,7 @@ import com.v2rayez.app.ui.components.StatTile
 import com.v2rayez.app.ui.components.TrafficAreaChart
 import com.v2rayez.app.ui.components.UsageBar
 import com.v2rayez.app.ui.components.VSpacer
-import com.v2rayez.app.ui.components.V2TopBar
+import com.v2rayez.app.ui.components.V2BackTopBar
 import com.v2rayez.app.ui.theme.ChartUpload
 import com.v2rayez.app.ui.theme.Connected
 import com.v2rayez.app.ui.theme.V2RayEzTheme
@@ -58,7 +58,7 @@ import com.v2rayez.app.ui.theme.Warning
 import com.v2rayez.app.ui.viewmodel.StatisticsViewModel
 
 @Composable
-fun StatisticsScreen(viewModel: StatisticsViewModel = hiltViewModel()) {
+fun StatisticsScreen(onBack: () -> Unit = {}, viewModel: StatisticsViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
 
     Column(
@@ -66,8 +66,9 @@ fun StatisticsScreen(viewModel: StatisticsViewModel = hiltViewModel()) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
-        V2TopBar(
+        V2BackTopBar(
             title = stringResource(R.string.stats_title),
+            onBack = onBack,
             actions = { RangeSelector(selected = state.range, onSelect = viewModel::setRange) }
         )
 
@@ -180,5 +181,5 @@ private fun TopServerRow(server: TopServer) {
 @Preview
 @Composable
 private fun StatisticsScreenPreview() {
-    V2RayEzTheme { StatisticsScreen(viewModel = StatisticsViewModel()) }
+    V2RayEzTheme { StatisticsScreen(onBack = {}, viewModel = StatisticsViewModel()) }
 }

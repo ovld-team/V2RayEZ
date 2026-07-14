@@ -1,6 +1,9 @@
 package com.v2rayez.app
 
 import com.v2rayez.app.data.tor.TorController
+import com.v2rayez.app.data.tor.TorReadinessDecision
+import com.v2rayez.app.data.tor.TorState
+import com.v2rayez.app.data.tor.torReadinessDecision
 import com.v2rayez.app.domain.model.TorConfig
 import com.v2rayez.app.domain.model.TorEngineType
 import com.v2rayez.app.domain.model.TorTransport
@@ -15,12 +18,12 @@ import org.junit.Test
 class TorLifecycleContractTest {
 
     @Test
-    fun bootConnectFallbackUsesAutoOrBootFlag() {
-        // Mirrors BootReceiver: bootAutoConnect || autoConnect
-        fun shouldBoot(boot: Boolean, auto: Boolean) = boot || auto
-        assertTrue(shouldBoot(true, false))
-        assertTrue(shouldBoot(false, true))
-        assertFalse(shouldBoot(false, false))
+    fun bootConnectUsesDedicatedBootFlagOnly() {
+        // Mirrors BootReceiver: bootAutoConnect only — the legacy autoConnect ("pick fastest
+        // server when you tap connect") no longer implies a silent boot-time reconnect.
+        fun shouldBoot(bootAutoConnect: Boolean) = bootAutoConnect
+        assertTrue(shouldBoot(true))
+        assertFalse(shouldBoot(false))
     }
 
     @Test
@@ -33,5 +36,41 @@ class TorLifecycleContractTest {
     @Test
     fun defaultEngineIsNativeC() {
         assertTrue(TorConfig().engine == TorEngineType.NATIVE_C)
+    }
+
+    @Test
+    fun connectedStillRequiresReachableExit() {
+        assertTrue(
+            torReadinessDecision(TorState.CONNECTED, socksAccepts = true, exitReachable = false) ==
+                TorReadinessDecision.WAIT
+        )
+        assertTrue(
+            torReadinessDecision(TorState.CONNECTED, socksAccepts = false, exitReachable = true) ==
+                TorReadinessDecision.READY
+        )
+    }
+
+    @Test
+    fun missingBootstrapLogsCanStillBecomeReadyThroughSocksAndExit() {
+        assertTrue(
+            torReadinessDecision(TorState.BOOTSTRAPPING, socksAccepts = true, exitReachable = true) ==
+                TorReadinessDecision.READY
+        )
+        assertTrue(
+            torReadinessDecision(TorState.BOOTSTRAPPING, socksAccepts = false, exitReachable = true) ==
+                TorReadinessDecision.WAIT
+        )
+    }
+
+    @Test
+    fun terminalStatesStopAwaitReadyImmediately() {
+        assertTrue(
+            torReadinessDecision(TorState.ERROR, socksAccepts = true, exitReachable = true) ==
+                TorReadinessDecision.STOP
+        )
+        assertTrue(
+            torReadinessDecision(TorState.OFF, socksAccepts = true, exitReachable = true) ==
+                TorReadinessDecision.STOP
+        )
     }
 }

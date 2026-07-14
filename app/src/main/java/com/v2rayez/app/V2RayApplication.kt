@@ -3,8 +3,11 @@ package com.v2rayez.app
 import android.app.Application
 import android.content.Context
 import android.util.Log
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
 import com.v2rayez.app.data.tor.TorController
 import com.v2rayez.app.data.tor.TorState
+import com.v2rayez.app.data.work.SubscriptionRefreshWorker
 import com.v2rayez.app.domain.model.LogEntry
 import com.v2rayez.app.domain.model.LogLevel
 import com.v2rayez.app.domain.repository.LogRepository
@@ -22,7 +25,7 @@ import java.util.UUID
 import javax.inject.Inject
 
 @HiltAndroidApp
-class V2RayApplication : Application() {
+class V2RayApplication : Application(), Configuration.Provider {
 
     @Inject lateinit var logRepository: LogRepository
     @Inject lateinit var settingsRepository: SettingsRepository
@@ -31,8 +34,13 @@ class V2RayApplication : Application() {
 
     @Inject lateinit var firebaseTelemetry: com.v2rayez.app.data.analytics.FirebaseTelemetry
     @Inject lateinit var remoteTelemetry: com.v2rayez.app.data.analytics.RemoteTelemetry
+    @Inject lateinit var hiltWorkerFactory: HiltWorkerFactory
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Lets WorkManager resolve [SubscriptionRefreshWorker]'s `@AssistedInject` deps via Hilt. */
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder().setWorkerFactory(hiltWorkerFactory).build()
 
     override fun attachBaseContext(base: Context) {
         val tag = LocaleHelper.savedTag(base)
@@ -47,6 +55,8 @@ class V2RayApplication : Application() {
         firebaseTelemetry.enableCrashReporting()
         installCrashLogger()
         restoreTor()
+        runCatching { SubscriptionRefreshWorker.schedule(this) }
+            .onFailure { Log.w("V2RayApplication", "WorkManager schedule failed", it) }
         appScope.launch { iranGeoAutoConfigurator.applyIfNeeded() }
         appScope.launch {
             runCatching {

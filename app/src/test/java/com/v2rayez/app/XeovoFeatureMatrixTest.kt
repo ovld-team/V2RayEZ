@@ -24,21 +24,15 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
-import java.io.File
-import java.net.URL
 import kotlin.random.Random
 
 /**
- * Exhaustive Xeovo feature matrix: named stacking scenarios + seeded random toggles.
- * Validates ConfigBuilder stacking rules (Tor standalone, fronting, WARP, desync/fragment).
+ * Xeovo feature matrix: named stacking scenarios + seeded random toggles. Offline by default
+ * via [XeovoTestSupport] fixture; live fetch requires [XeovoTestSupport.LIVE_NETWORK_ENV]=1.
  */
 class XeovoFeatureMatrixTest {
 
-    private fun loadSub(): String {
-        val local = File("/tmp/xeovo-sub.txt")
-        if (local.isFile && local.length() > 100) return local.readText()
-        return URL(SUB_URL).openStream().bufferedReader().readText()
-    }
+    private fun loadSub(): String = XeovoTestSupport.loadSub()
 
     private fun servers(): List<Server> =
         ProxyParser.parseMany(loadSub(), ServerGroup.SUBSCRIPTION, "xeovo-feat")
@@ -389,10 +383,5 @@ class XeovoFeatureMatrixTest {
         assertFalse(json.contains("\"tag\":\"byedpi\""))
         assertFalse(json.contains("\"tag\":\"fragment\""))
         assertFalse(json.contains("\"tag\":\"tor\""))
-    }
-
-    companion object {
-        const val SUB_URL =
-            "https://xeovo.com/proxy/pw/LUSyhcYjwPoC1FvhQd95hrUacf6RtJX7/plain/config"
     }
 }

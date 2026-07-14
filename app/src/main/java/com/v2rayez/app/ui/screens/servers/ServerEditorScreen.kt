@@ -79,6 +79,23 @@ fun ServerEditorScreen(
     var allowInsecure by remember(serverId) { mutableStateOf(false) }
     var publicKey by remember(serverId) { mutableStateOf("") }
     var shortId by remember(serverId) { mutableStateOf("") }
+    var ssPlugin by remember(serverId) { mutableStateOf("") }
+    var ssPluginOptions by remember(serverId) { mutableStateOf("") }
+    var sshUser by remember(serverId) { mutableStateOf("") }
+    var sshPrivateKey by remember(serverId) { mutableStateOf("") }
+    var sshHostKey by remember(serverId) { mutableStateOf("") }
+    var wgPrivateKey by remember(serverId) { mutableStateOf("") }
+    var wgPeerPublicKey by remember(serverId) { mutableStateOf("") }
+    var wgPreSharedKey by remember(serverId) { mutableStateOf("") }
+    var wgAddresses by remember(serverId) { mutableStateOf("") }
+    var wgAllowedIps by remember(serverId) { mutableStateOf("0.0.0.0/0, ::/0") }
+    var wgReserved by remember(serverId) { mutableStateOf("") }
+    var wgMtu by remember(serverId) { mutableStateOf("") }
+    var dnsDomain by remember(serverId) { mutableStateOf("") }
+    var dnsPubKey by remember(serverId) { mutableStateOf("") }
+    var dnsResolver by remember(serverId) { mutableStateOf("") }
+    var dnsMode by remember(serverId) { mutableStateOf("doh") }
+    var psiphonConfig by remember(serverId) { mutableStateOf("") }
     var frontProxyId by remember(serverId) { mutableStateOf<String?>(null) }
     var customGroup by remember(serverId) { mutableStateOf("") }
     var preferredCore by remember(serverId) {
@@ -114,6 +131,23 @@ fun ServerEditorScreen(
                 allowInsecure = s.allowInsecure
                 publicKey = s.publicKey
                 shortId = s.shortId
+                ssPlugin = s.ssPlugin
+                ssPluginOptions = s.ssPluginOptions
+                sshUser = s.sshUser
+                sshPrivateKey = s.sshPrivateKey
+                sshHostKey = s.sshHostKey
+                wgPrivateKey = s.wgPrivateKey
+                wgPeerPublicKey = s.wgPeerPublicKey
+                wgPreSharedKey = s.wgPreSharedKey
+                wgAddresses = s.wgLocalAddresses.joinToString(", ")
+                wgAllowedIps = s.wgAllowedIps.joinToString(", ")
+                wgReserved = s.wgReserved.joinToString(",")
+                wgMtu = s.wgMtu.takeIf { it > 0 }?.toString().orEmpty()
+                dnsDomain = s.dnsTunnelDomain
+                dnsPubKey = s.dnsTunnelPubKey
+                dnsResolver = s.dnsTunnelResolver
+                dnsMode = s.dnsTunnelMode
+                psiphonConfig = s.psiphonConfig
                 frontProxyId = s.frontProxyId
                 customGroup = s.customGroup.orEmpty()
                 preferredCore = s.preferredCore
@@ -121,7 +155,8 @@ fun ServerEditorScreen(
         }
     }
 
-    val usesPassword = protocol == Protocol.TROJAN || protocol == Protocol.SHADOWSOCKS
+    val usesPassword = protocol == Protocol.TROJAN ||
+        protocol == Protocol.SHADOWSOCKS || protocol == Protocol.SSH
 
     Column(Modifier.fillMaxSize()) {
         V2BackTopBar(
@@ -154,49 +189,88 @@ fun ServerEditorScreen(
             VSpacer(16)
 
             SectionHeader(title = stringResource(R.string.server_editor_protocol))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // WireGuard/SSH/DNS-tunnel/Psiphon are import-only (paste a link/.conf); the
-                // manual editor covers the share-URI protocols. Keep an imported server's own
-                // protocol chip visible so opening it for edit doesn't silently retype it.
-                val editable = listOf(Protocol.VLESS, Protocol.VMESS, Protocol.TROJAN, Protocol.SHADOWSOCKS)
-                val chips = if (protocol in editable) editable else editable + protocol
-                chips.forEach { p ->
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Protocol.entries.forEach { p ->
                     V2FilterChip(p.label, protocol == p) { protocol = p }
                 }
             }
             VSpacer(16)
 
-            OutlinedTextField(
-                value = host,
-                onValueChange = { host = it },
-                label = { Text(stringResource(R.string.server_editor_address)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            VSpacer(16)
-            OutlinedTextField(
-                value = port,
-                onValueChange = { new -> port = new.filter { it.isDigit() }.take(5) },
-                label = { Text(stringResource(R.string.server_editor_port)) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-            VSpacer(16)
-            OutlinedTextField(
-                value = secret,
-                onValueChange = { secret = it },
-                label = {
-                    Text(
-                        stringResource(
-                            if (usesPassword) R.string.server_editor_password else R.string.server_editor_uuid
+            when (protocol) {
+                Protocol.WIREGUARD -> {
+                    EditorField(stringResource(R.string.editor_wg_private_key), wgPrivateKey) { wgPrivateKey = it }
+                    EditorField(stringResource(R.string.editor_wg_public_key), wgPeerPublicKey) { wgPeerPublicKey = it }
+                    EditorField(stringResource(R.string.editor_wg_preshared_key), wgPreSharedKey) { wgPreSharedKey = it }
+                    EditorField(stringResource(R.string.editor_wg_addresses), wgAddresses) { wgAddresses = it }
+                    EditorField(stringResource(R.string.editor_wg_allowed_ips), wgAllowedIps) { wgAllowedIps = it }
+                    EditorField(stringResource(R.string.editor_wg_reserved), wgReserved) { wgReserved = it }
+                    EditorField(stringResource(R.string.editor_wg_mtu), wgMtu, KeyboardType.Number) {
+                        wgMtu = it.filter(Char::isDigit).take(5)
+                    }
+                }
+                Protocol.SSH -> {
+                    EditorField(stringResource(R.string.editor_ssh_user), sshUser) { sshUser = it }
+                    EditorMultilineField(stringResource(R.string.editor_ssh_private_key), sshPrivateKey) {
+                        sshPrivateKey = it
+                    }
+                    EditorField(stringResource(R.string.editor_ssh_host_key), sshHostKey) { sshHostKey = it }
+                }
+                Protocol.DNSTUNNEL -> {
+                    EditorField(stringResource(R.string.editor_dns_domain), dnsDomain) { dnsDomain = it }
+                    EditorField(stringResource(R.string.editor_dns_public_key), dnsPubKey) { dnsPubKey = it }
+                    EditorField(stringResource(R.string.editor_dns_resolver), dnsResolver) { dnsResolver = it }
+                    EditorField(stringResource(R.string.editor_dns_mode), dnsMode) { dnsMode = it.lowercase() }
+                }
+                Protocol.PSIPHON -> {
+                    EditorMultilineField(stringResource(R.string.editor_psiphon_config), psiphonConfig) {
+                        psiphonConfig = it
+                    }
+                }
+                else -> Unit
+            }
+
+            if (protocol != Protocol.DNSTUNNEL && protocol != Protocol.PSIPHON) {
+                OutlinedTextField(
+                    value = host,
+                    onValueChange = { host = it },
+                    label = { Text(stringResource(R.string.server_editor_address)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                VSpacer(16)
+                OutlinedTextField(
+                    value = port,
+                    onValueChange = { new -> port = new.filter { it.isDigit() }.take(5) },
+                    label = { Text(stringResource(R.string.server_editor_port)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                VSpacer(16)
+            }
+            if (protocol in listOf(
+                    Protocol.VLESS, Protocol.VMESS, Protocol.TROJAN,
+                    Protocol.SHADOWSOCKS, Protocol.SSH
+                )
+            ) {
+                OutlinedTextField(
+                    value = secret,
+                    onValueChange = { secret = it },
+                    label = {
+                        Text(
+                            stringResource(
+                                if (usesPassword) R.string.server_editor_password else R.string.server_editor_uuid
+                            )
                         )
-                    )
-                },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            VSpacer(16)
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                VSpacer(16)
+            }
 
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -246,6 +320,12 @@ fun ServerEditorScreen(
                         cipher
                     ) { cipher = it }
                 }
+                if (protocol == Protocol.SHADOWSOCKS) {
+                    EditorField(stringResource(R.string.editor_ss_plugin), ssPlugin) { ssPlugin = it }
+                    EditorField(stringResource(R.string.editor_ss_plugin_options), ssPluginOptions) {
+                        ssPluginOptions = it
+                    }
+                }
                 if (security == "reality") {
                     EditorField(stringResource(R.string.editor_reality_pbk), publicKey) { publicKey = it }
                     EditorField(stringResource(R.string.editor_reality_sid), shortId) { shortId = it }
@@ -292,15 +372,24 @@ fun ServerEditorScreen(
             PrimaryButton(
                 text = stringResource(R.string.action_save),
                 onClick = {
-                    if (name.isBlank() && host.isBlank()) {
+                    val effectiveHost = when (protocol) {
+                        Protocol.DNSTUNNEL -> dnsDomain.trim()
+                        Protocol.PSIPHON -> "psiphon"
+                        else -> host.trim()
+                    }
+                    if (name.isBlank() && effectiveHost.isBlank()) {
                         scope.launch { snackbarHostState.showSnackbar(invalidMsg) }
                     } else {
                         viewModel.save(
                             existing = existing,
                             name = name,
                             protocol = protocol,
-                            host = host.trim(),
-                            port = port.toIntOrNull() ?: 443,
+                            host = effectiveHost,
+                            port = when (protocol) {
+                                Protocol.DNSTUNNEL -> 53
+                                Protocol.PSIPHON -> 0
+                                else -> port.toIntOrNull() ?: 443
+                            },
                             secret = secret.trim(),
                             network = network,
                             streamSecurity = security,
@@ -315,6 +404,23 @@ fun ServerEditorScreen(
                             allowInsecure = allowInsecure,
                             publicKey = publicKey.trim(),
                             shortId = shortId.trim(),
+                            ssPlugin = ssPlugin.trim(),
+                            ssPluginOptions = ssPluginOptions.trim(),
+                            sshUser = sshUser.trim(),
+                            sshPrivateKey = sshPrivateKey.trim(),
+                            sshHostKey = sshHostKey.trim(),
+                            wgPrivateKey = wgPrivateKey.trim(),
+                            wgPeerPublicKey = wgPeerPublicKey.trim(),
+                            wgPreSharedKey = wgPreSharedKey.trim(),
+                            wgLocalAddresses = csv(wgAddresses),
+                            wgAllowedIps = csv(wgAllowedIps),
+                            wgReserved = csv(wgReserved).mapNotNull(String::toIntOrNull),
+                            wgMtu = wgMtu.toIntOrNull() ?: 0,
+                            dnsTunnelDomain = dnsDomain.trim(),
+                            dnsTunnelPubKey = dnsPubKey.trim(),
+                            dnsTunnelResolver = dnsResolver.trim(),
+                            dnsTunnelMode = dnsMode.trim(),
+                            psiphonConfig = psiphonConfig.trim(),
                             frontProxyId = frontProxyId,
                             customGroup = customGroup.trim().takeIf { it.isNotBlank() },
                             preferredCore = preferredCore
@@ -382,6 +488,20 @@ private fun EditorField(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
     )
 }
+
+@Composable
+private fun EditorMultilineField(label: String, value: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        minLines = 3,
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+    )
+}
+
+private fun csv(value: String): List<String> =
+    value.split(",").map(String::trim).filter(String::isNotEmpty)
 
 @Preview
 @Composable

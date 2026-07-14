@@ -4,6 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.v2rayez.app.data.fronting.DomainFrontEngine
 import com.v2rayez.app.data.fronting.DomainFrontTuning
+import com.v2rayez.app.data.mock.MockLogRepository
+import com.v2rayez.app.data.mock.MockSettingsRepository
+import com.v2rayez.app.data.mock.MockVpnController
 import com.v2rayez.app.domain.model.AppSettings
 import com.v2rayez.app.domain.model.ConnectionStatus
 import com.v2rayez.app.domain.model.DomainFrontConfig
@@ -36,6 +39,14 @@ class DomainFrontingViewModel @Inject constructor(
     private val logs: LogRepository,
     private val vpn: VpnController
 ) : ViewModel() {
+
+    /** Preview / no-arg constructor — [DomainFrontEngine] itself has a no-arg ctor (pure Java dialer, no native calls). */
+    constructor() : this(
+        MockSettingsRepository(),
+        DomainFrontEngine(),
+        MockLogRepository(),
+        MockVpnController()
+    )
 
     val state: StateFlow<AppSettings> =
         settings.settings().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())

@@ -2,6 +2,7 @@ package com.v2rayez.app.data.mock
 
 import com.v2rayez.app.domain.model.ActivityItem
 import com.v2rayez.app.domain.model.AppSettings
+import com.v2rayez.app.domain.model.BackupSnapshot
 import com.v2rayez.app.domain.model.ConnectionState
 import com.v2rayez.app.domain.model.ImportResult
 import com.v2rayez.app.domain.model.LogEntry
@@ -61,6 +62,13 @@ class MockServerRepository : ServerRepository {
     override suspend fun addSubscription(name: String, url: String): ImportResult = ImportResult(true, 0)
     override suspend fun refreshSubscription(id: String): ImportResult = ImportResult(true, 0)
     override suspend fun deleteSubscription(id: String) = Unit
+    override suspend fun backupSnapshot(): BackupSnapshot =
+        BackupSnapshot(MockData.servers, emptyList())
+    override suspend fun restoreBackup(
+        subscriptions: List<Subscription>,
+        manualUris: List<String>,
+        subscriptionServers: Map<String, List<String>>
+    ): ImportResult = ImportResult(true, manualUris.size + subscriptionServers.values.sumOf { it.size })
     override suspend fun setSubscriptionEnabled(id: String, enabled: Boolean) = Unit
     override suspend fun renameSubscription(id: String, name: String) = Unit
     override suspend fun updateSubscriptionUrl(id: String, url: String) = Unit

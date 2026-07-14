@@ -133,10 +133,16 @@ fun CoreManagerScreen(
                             }
                         }
                         if (type != ProxyCoreType.XRAY && !viewModel.isBundledRunnable(type)) {
+                            // sing-box / mihomo are packaging-excluded (download-only) — not an error.
                             Text(
                                 stringResource(R.string.core_bundled_missing, viewModel.deviceAbi()),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                stringResource(R.string.core_download_only_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         for (rel in remote[type].orEmpty().take(8)) {

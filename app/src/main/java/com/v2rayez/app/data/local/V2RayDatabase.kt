@@ -18,10 +18,14 @@ class EnumConverters {
         runCatching { ServerGroup.valueOf(s) }.getOrDefault(ServerGroup.ALL)
 }
 
+/**
+ * Project history can recover schemas from v3 onward. The supported non-destructive path is
+ * therefore 3→8; older unknown versions intentionally fail instead of wiping user data.
+ */
 @Database(
     entities = [ServerEntity::class, SubscriptionEntity::class, SessionEntity::class, DailyTrafficEntity::class],
-    version = 7,
-    exportSchema = false
+    version = 8,
+    exportSchema = true
 )
 @TypeConverters(EnumConverters::class)
 abstract class V2RayDatabase : RoomDatabase() {
@@ -73,6 +77,18 @@ abstract class V2RayDatabase : RoomDatabase() {
                 }
                 db.execSQL("ALTER TABLE servers ADD COLUMN dnsTunnelMode TEXT NOT NULL DEFAULT 'doh'")
                 db.execSQL("ALTER TABLE servers ADD COLUMN wgMtu INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /** v8 preserves SIP003 Shadowsocks plugins and WireGuard peer AllowedIPs. */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE servers ADD COLUMN ssPlugin TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE servers ADD COLUMN ssPluginOptions TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    "ALTER TABLE servers ADD COLUMN wgAllowedIps TEXT NOT NULL " +
+                        "DEFAULT '0.0.0.0/0,::/0'"
+                )
             }
         }
     }

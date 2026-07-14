@@ -6,8 +6,11 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -17,11 +20,13 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,13 +35,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.v2rayez.app.R
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.ui.theme.Connected
 import com.v2rayez.app.ui.theme.Warning
 
-/** Small stat tile: icon + label + value (Download / Upload / Ping / Speed). */
+/**
+ * Small stat tile: icon + label + value (Download / Upload / Ping / Speed).
+ * Label/value are clamped to one line so long translated strings (FA/RU) never blow up the
+ * tile's height and desync it from its row sibling on narrow (compact-width) screens — pair
+ * with `Modifier.height(IntrinsicSize.Min)` on the parent `Row` for equal-height tiles.
+ */
 @Composable
 fun StatTile(
     icon: ImageVector,
@@ -45,14 +56,27 @@ fun StatTile(
     modifier: Modifier = Modifier,
     accent: Color = MaterialTheme.colorScheme.primary
 ) {
-    CardSurface(modifier = modifier, shape = RoundedCornerShape(16.dp)) {
-        Column(Modifier.padding(14.dp)) {
+    CardSurface(modifier = modifier.fillMaxHeight(), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(14.dp).fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             VSpacer(8)
-            Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -168,7 +192,7 @@ fun ServerListItem(
             HSpacer(4)
             Icon(
                 Icons.Filled.MoreVert,
-                contentDescription = "More",
+                contentDescription = stringResource(R.string.action_more),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp).clip(CircleShape).clickable(onClick = onMenuClick)
             )
@@ -176,7 +200,11 @@ fun ServerListItem(
     }
 }
 
-/** Quick action: circular icon over a caption. */
+/**
+ * Quick action: circular icon over a caption. Label is clamped to 2 lines with a smaller
+ * min-scale so long FA/RU captions shrink to fit instead of wrapping unevenly and pushing
+ * sibling buttons out of alignment in a `SpaceBetween`/weighted row on narrow screens.
+ */
 @Composable
 fun QuickActionButton(
     icon: ImageVector,
@@ -198,11 +226,24 @@ fun QuickActionButton(
         ) {
             Icon(icon, contentDescription = label, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
         }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            softWrap = true
+        )
     }
 }
 
-/** Tools grid card: icon tile, title, subtitle. */
+/**
+ * Tools grid card: icon tile, title, subtitle. Title/subtitle are clamped so mismatched text
+ * length between grid siblings doesn't desync card heights; pair with
+ * `Modifier.height(IntrinsicSize.Min)` on the parent `Row` + `Modifier.fillMaxHeight()` on each
+ * card for equal-height rows on compact-width screens.
+ */
 @Composable
 fun ToolCard(
     icon: ImageVector,
@@ -212,9 +253,10 @@ fun ToolCard(
     modifier: Modifier = Modifier,
     accent: Color = MaterialTheme.colorScheme.primary
 ) {
-    CardSurface(modifier = modifier, shape = RoundedCornerShape(16.dp)) {
+    CardSurface(modifier = modifier.fillMaxHeight(), shape = RoundedCornerShape(16.dp)) {
         Column(
             modifier = Modifier
+                .fillMaxHeight()
                 .clickable(onClick = onClick)
                 .padding(14.dp)
         ) {
@@ -228,9 +270,22 @@ fun ToolCard(
                 Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(22.dp))
             }
             VSpacer(12)
-            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             VSpacer(2)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -293,4 +348,41 @@ fun SettingSwitchRow(
     SettingRow(icon = icon, title = title, subtitle = subtitle, modifier = modifier, trailing = {
         V2Switch(checked = checked, onCheckedChange = onCheckedChange)
     })
+}
+
+/**
+ * Shared “changes apply after reconnect” banner (App Proxy / SNI / Domain Front / etc.).
+ */
+@Composable
+fun ReconnectBanner(
+    hint: String,
+    actionLabel: String,
+    onReconnect: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    CardSurface(modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Filled.Refresh,
+                contentDescription = null,
+                tint = Warning,
+                modifier = Modifier.size(18.dp)
+            )
+            HSpacer(10)
+            Text(
+                hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onReconnect) {
+                Text(actionLabel)
+            }
+        }
+    }
 }

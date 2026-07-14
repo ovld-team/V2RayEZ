@@ -1,0 +1,26 @@
+proxies:
+  - name: Reality Trojan
+    type: trojan
+    server: tr.example.com
+    port: 443
+    password: secret
+    network: grpc
+    sni: www.example.com
+    reality-opts:
+      public-key: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      short-id: abcd
+    grpc-opts:
+      grpc-service-name: tunnel
+  - { name: Plugin SS, type: ss, server: ss.example.com, port: 8388, cipher: aes-256-gcm, password: pass, plugin: v2ray-plugin, plugin-opts: { mode: websocket, host: cdn.example.com } }
+  - name: Routed WG
+    type: wireguard
+    server: wg.example.com
+    port: 51820
+    private-key: private
+    public-key: peer
+    ip: [10.0.0.2/32, "fd00::2/128"]
+    allowed-ips: [10.0.0.0/8, 192.168.0.0/16]
+  - name: Unsupported Hysteria
+    type: hysteria2
+    server: hy.example.com
+    port: 443

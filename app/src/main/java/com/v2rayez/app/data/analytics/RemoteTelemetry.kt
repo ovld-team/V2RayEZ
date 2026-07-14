@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.v2rayez.app.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
+import io.sentry.Breadcrumb
 import io.sentry.Sentry
 import io.sentry.SentryLevel
 import io.sentry.android.core.SentryAndroid
@@ -28,6 +29,9 @@ enum class FailureCategory(val tag: String) {
  * No consent gate. Strings are scrubbed by [PiiScrubber] (hosts, URIs, bridges, IPs, PEMs).
  * Session Replay and performance tracing are disabled. DSN comes from BuildConfig
  * (`sentry.dsn` in local.properties or `-Psentry.dsn`); blank DSN keeps this a no-op.
+ *
+ * Sentry Logs (`options.logs`) + Gradle Logcat instrumentation forward WARN+/errors; call sites
+ * also emit [Sentry.logger] alongside captureMessage for searchable Logs UI entries.
  */
 @Singleton
 class RemoteTelemetry @Inject constructor(
@@ -55,6 +59,15 @@ class RemoteTelemetry @Inject constructor(
                 options.isEnableAutoSessionTracking = true
                 options.isEnableUncaughtExceptionHandler = true
 
+                // Structured Logs + Logcat integration (Gradle plugin) → Sentry Logs UI.
+                options.logs.isEnabled = true
+                options.logs.setBeforeSend { logEvent ->
+                    runCatching {
+                        logEvent.body = PiiScrubber.scrubOrNull(logEvent.body) ?: logEvent.body
+                    }
+                    logEvent
+                }
+
                 options.isSendDefaultPii = false
                 options.isAttachScreenshot = false
                 options.isAttachViewHierarchy = false
@@ -81,7 +94,7 @@ class RemoteTelemetry @Inject constructor(
                 }
             }
             initialized = true
-            Log.i(TAG, "Sentry initialized (PRIMARY telemetry)")
+            Log.i(TAG, "Sentry initialized (PRIMARY telemetry, logs enabled)")
         }.onFailure { Log.w(TAG, "Sentry init failed — continuing without it", it) }
     }
 
@@ -90,6 +103,7 @@ class RemoteTelemetry @Inject constructor(
         if (!initialized) return
         runCatching {
             Sentry.captureException(t)
+            Sentry.logger().fatal(PiiScrubber.scrub(t.message ?: t.javaClass.simpleName))
             Sentry.flush(2_000)
         }
     }
@@ -102,6 +116,19 @@ class RemoteTelemetry @Inject constructor(
     /** On-demand pack/asset download failure (addon binaries, geo databases, subscriptions). */
     fun captureDownloadFailure(subject: String, reason: String) {
         capture(FailureCategory.DOWNLOAD, reason, extraTags = mapOf("subject" to PiiScrubber.scrub(subject)))
+    }
+
+    /** Non-PII breadcrumb (e.g. Tor bootstrap milestones). No-op when DSN blank. */
+    fun addBreadcrumb(category: String, message: String) {
+        if (!initialized) return
+        runCatching {
+            val crumb = Breadcrumb().apply {
+                this.category = category.take(64)
+                this.message = PiiScrubber.scrub(message)
+                level = SentryLevel.INFO
+            }
+            Sentry.addBreadcrumb(crumb)
+        }
     }
 
     /**
@@ -120,17 +147,22 @@ class RemoteTelemetry @Inject constructor(
                 scope.setExtra("server_ref", PiiScrubber.scrub(serverId))
                 Sentry.captureMessage("Free-server test timed out", SentryLevel.INFO)
             }
+            Sentry.logger().info("Free-server test timed out")
         }
     }
 
     private fun capture(category: FailureCategory, reason: String, extraTags: Map<String, String?> = emptyMap()) {
         if (!initialized) return
+        val scrubbed = PiiScrubber.scrub(reason)
         runCatching {
             Sentry.withScope { scope ->
                 scope.setTag("failure_category", category.tag)
                 extraTags.forEach { (k, v) -> if (v != null) scope.setTag(k, v) }
-                Sentry.captureMessage(PiiScrubber.scrub(reason), SentryLevel.ERROR)
+                Sentry.captureMessage(scrubbed, SentryLevel.ERROR)
             }
+            // Also land in Sentry Logs (searchable) — Logcat WARN+ is auto-forwarded separately.
+            Sentry.logger().error("[%s] %s", category.tag, scrubbed)
+            Log.e(TAG, "[${category.tag}] $scrubbed")
         }
     }
 

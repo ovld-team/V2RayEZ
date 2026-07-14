@@ -24,8 +24,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.v2rayez.app.R
 import com.v2rayez.app.ui.navigation.BottomDestination
 
 /** Simple screen top bar: title (or custom title content) left, actions right. */
@@ -80,7 +82,7 @@ fun V2BackTopBar(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
                 Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back",
+                contentDescription = stringResource(R.string.action_back),
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .size(40.dp)

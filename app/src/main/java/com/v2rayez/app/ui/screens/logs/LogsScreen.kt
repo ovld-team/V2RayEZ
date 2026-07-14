@@ -13,21 +13,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.FileDownload
-import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,16 +61,39 @@ fun LogsScreen(onBack: () -> Unit, viewModel: LogsViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var searchExpanded by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+
+    LaunchedEffect(state.filtered.size, state.autoScroll) {
+        if (state.autoScroll && state.filtered.isNotEmpty()) {
+            listState.animateScrollToItem(state.filtered.size - 1)
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         V2BackTopBar(
             title = stringResource(R.string.logs_title),
             onBack = onBack,
             actions = {
-                TopIcon(Icons.Filled.Search, stringResource(R.string.action_search))
-                TopIcon(Icons.Filled.FilterList, stringResource(R.string.action_filter))
+                TopIcon(
+                    if (searchExpanded) Icons.Filled.Close else Icons.Filled.Search,
+                    stringResource(R.string.action_search)
+                ) { searchExpanded = !searchExpanded }
             }
         )
+
+        if (searchExpanded) {
+            OutlinedTextField(
+                value = state.query,
+                onValueChange = viewModel::setQuery,
+                placeholder = { Text(stringResource(R.string.logs_search_hint)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions.Default,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp)
+            )
+        }
 
         Row(
             modifier = Modifier
@@ -78,15 +108,26 @@ fun LogsScreen(onBack: () -> Unit, viewModel: LogsViewModel = hiltViewModel()) {
             }
         }
 
-        LazyColumn(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-        ) {
-            items(state.filtered, key = { it.id }) { entry ->
-                LogRow(entry)
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), thickness = 1.dp)
+        if (state.filtered.isEmpty()) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    stringResource(R.string.logs_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+            ) {
+                items(state.filtered, key = { it.id }) { entry ->
+                    LogRow(entry)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f), thickness = 1.dp)
+                }
             }
         }
 
@@ -160,11 +201,12 @@ private fun LogsChipButton(icon: ImageVector, label: String, onClick: () -> Unit
 }
 
 @Composable
-private fun TopIcon(icon: ImageVector, cd: String) {
+private fun TopIcon(icon: ImageVector, cd: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .clip(androidx.compose.foundation.shape.CircleShape)
             .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
             .padding(9.dp)
     ) {
         Icon(icon, contentDescription = cd, tint = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -8,6 +8,7 @@ import com.v2rayez.app.domain.model.RuleOutbound
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.WarpConfig
 import com.v2rayez.app.domain.model.WarpMode
+import com.v2rayez.app.domain.model.torEffectiveSettings
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -69,7 +70,19 @@ object ConfigBuilder {
             "WireGuard peer public key is missing — edit the server."
         server.protocol == Protocol.SSH && server.password.isBlank() && server.sshPrivateKey.isBlank() ->
             "SSH needs a password or a private key — edit the server."
+        resolvedStreamSecurity(server) == "reality" && server.publicKey.isBlank() ->
+            "Reality public key (pbk) is missing — edit or re-import the server."
+        resolvedStreamSecurity(server) == "reality" && !isValidRealityPublicKey(server.publicKey) ->
+            "Reality public key (pbk) is invalid — expected a 32-byte X25519 base64 key."
+        server.network.lowercase() in setOf("quic", "kcp", "mkcp") ->
+            "${server.network} transport is not supported by this build; choose TCP, WS, gRPC, HTTP/2, XHTTP, or HTTPUpgrade."
         else -> null
+    }
+
+    private fun isValidRealityPublicKey(value: String): Boolean {
+        val cleaned = value.trim().replace('-', '+').replace('_', '/')
+        val padded = cleaned.padEnd((cleaned.length + 3) / 4 * 4, '=')
+        return runCatching { java.util.Base64.getDecoder().decode(padded).size == 32 }.getOrDefault(false)
     }
 
     /**
@@ -97,8 +110,9 @@ object ConfigBuilder {
         includeTun: Boolean = true,
         geositeAvailable: Boolean = false
     ): String {
+        val effectiveSettings = settings.torEffectiveSettings()
         val obj = buildJsonObject {
-            put("log", logBlock(settings))
+            put("log", logBlock(effectiveSettings))
             // Enable outbound traffic accounting so queryStats("proxy","uplink"/"downlink")
             // returns real byte counters instead of always 0.
             putJsonObject("stats") {}
@@ -108,11 +122,11 @@ object ConfigBuilder {
                     put("statsOutboundDownlink", true)
                 }
             }
-            put("dns", dnsBlock(settings, geositeAvailable))
-            if (settings.dns.enableFakeDns) put("fakedns", fakednsBlock())
-            put("inbounds", inbounds(settings, includeTun = includeTun))
-            put("outbounds", outbounds(server, settings, frontServer, desyncRunning, domainFrontRunning))
-            put("routing", routing(settings, domainFrontRunning, geositeAvailable))
+            put("dns", dnsBlock(effectiveSettings, geositeAvailable))
+            if (effectiveSettings.dns.enableFakeDns) put("fakedns", fakednsBlock())
+            put("inbounds", inbounds(effectiveSettings, includeTun = includeTun))
+            put("outbounds", outbounds(server, effectiveSettings, frontServer, desyncRunning, domainFrontRunning))
+            put("routing", routing(effectiveSettings, domainFrontRunning, geositeAvailable))
         }
         return json.encodeToString(JsonObject.serializer(), obj)
     }
@@ -473,7 +487,10 @@ object ConfigBuilder {
                             put("publicKey", server.wgPeerPublicKey)
                             if (server.wgPreSharedKey.isNotBlank()) put("preSharedKey", server.wgPreSharedKey)
                             put("endpoint", "$address:$port")
-                            putJsonArray("allowedIPs") { add("0.0.0.0/0"); add("::/0") }
+                            putJsonArray("allowedIPs") {
+                                server.wgAllowedIps.ifEmpty { listOf("0.0.0.0/0", "::/0") }
+                                    .forEach { add(it) }
+                            }
                         }
                     }
                 }
@@ -655,8 +672,31 @@ object ConfigBuilder {
         val torBesideFront = settings.tor.enabled && fronting
         put("domainStrategy", r.domainStrategy)
         putJsonArray("rules") {
-            // Standalone Tor: everything through the Tor SOCKS outbound.
+            // DNS must win first-match over Tor catch-all: Tor SOCKS does not carry UDP DNS.
+            if (dnsHandled(settings)) {
+                addJsonObject {
+                    put("type", "field")
+                    put("outboundTag", TAG_DNS)
+                    put("port", "53")
+                }
+            } else {
+                addJsonObject {
+                    put("type", "field")
+                    put("outboundTag", TAG_DIRECT)
+                    put("port", "53")
+                    putJsonArray("network") { add("udp") }
+                }
+            }
+            // Standalone Tor: loopback (SOCKS/DNSPort) stays direct; everything else → Tor.
             if (torStandalone) {
+                addJsonObject {
+                    put("type", "field")
+                    put("outboundTag", TAG_DIRECT)
+                    putJsonArray("ip") {
+                        add("127.0.0.1")
+                        add("::1")
+                    }
+                }
                 addJsonObject {
                     put("type", "field")
                     put("outboundTag", TAG_TOR)
@@ -674,22 +714,6 @@ object ConfigBuilder {
                 put("type", "field")
                 put("outboundTag", TAG_BLOCK)
                 putJsonArray("protocol") { add("quic") }
-            }
-            // DNS traffic. When DoH / FakeDNS / local DNS is on, route port 53 to the DNS
-            // handler outbound so those settings actually apply; otherwise send it direct.
-            if (dnsHandled(settings)) {
-                addJsonObject {
-                    put("type", "field")
-                    put("outboundTag", TAG_DNS)
-                    put("port", "53")
-                }
-            } else {
-                addJsonObject {
-                    put("type", "field")
-                    put("outboundTag", TAG_DIRECT)
-                    put("port", "53")
-                    putJsonArray("network") { add("udp") }
-                }
             }
             // Beside domain fronting: onion sites still need Tor; clearnet uses proxy.
             if (torBesideFront) {

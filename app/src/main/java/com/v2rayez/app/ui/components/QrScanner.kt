@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -62,6 +63,7 @@ import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.v2rayez.app.R
 import java.util.concurrent.Executors
 
 /**
@@ -76,7 +78,7 @@ import java.util.concurrent.Executors
 fun QrScannerDialog(
     onResult: (String) -> Unit,
     onDismiss: () -> Unit,
-    prompt: String = "Align the QR code within the frame"
+    prompt: String = stringResource(R.string.qr_scan_prompt)
 ) {
     val context = LocalContext.current
     var hasCameraPermission by remember {
@@ -126,14 +128,14 @@ fun QrScannerDialog(
                         onClick = onDismiss,
                         modifier = Modifier.size(44.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.4f))
                     ) {
-                        Icon(Icons.Filled.Close, contentDescription = "Close scanner", tint = Color.White)
+                        Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.action_close_scanner), tint = Color.White)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         IconButton(
                             onClick = { torchOn = false; lensBack = !lensBack },
                             modifier = Modifier.size(44.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.4f))
                         ) {
-                            Icon(Icons.Filled.Cameraswitch, contentDescription = "Switch camera", tint = Color.White)
+                            Icon(Icons.Filled.Cameraswitch, contentDescription = stringResource(R.string.action_switch_camera), tint = Color.White)
                         }
                         IconButton(
                             onClick = { torchOn = !torchOn },
@@ -141,7 +143,7 @@ fun QrScannerDialog(
                         ) {
                             Icon(
                                 if (torchOn) Icons.Filled.FlashOn else Icons.Filled.FlashOff,
-                                contentDescription = if (torchOn) "Turn off flashlight" else "Turn on flashlight",
+                                contentDescription = if (torchOn) stringResource(R.string.action_flashlight_off) else stringResource(R.string.action_flashlight_on),
                                 tint = Color.White
                             )
                         }
@@ -154,7 +156,7 @@ fun QrScannerDialog(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        "Camera permission is required to scan QR codes.",
+                        stringResource(R.string.qr_camera_permission_required),
                         color = Color.White,
                         textAlign = TextAlign.Center
                     )

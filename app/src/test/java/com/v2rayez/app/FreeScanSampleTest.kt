@@ -1,5 +1,6 @@
 package com.v2rayez.app
 
+import com.v2rayez.app.data.repository.RealVpnController
 import com.v2rayez.app.domain.model.Protocol
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.ServerGroup
@@ -87,5 +88,22 @@ class FreeScanSampleTest {
         assertEquals("Trojan · same.example.com:443", named[0].name)
         assertEquals("Trojan · same.example.com:443 #2", named[1].name)
         assertEquals("Trojan · same.example.com:443 #3", named[2].name)
+    }
+
+    @Test
+    fun timedOutHandshakeKeepsReachableTcpPing() {
+        val result = RealVpnController.tcpResult("free-1", tcpMs = 37, failureMessage = "Timed out")
+
+        assertTrue(result.success)
+        assertEquals(37, result.pingMs)
+    }
+
+    @Test
+    fun failedTcpProbeStaysUnreachable() {
+        val result = RealVpnController.tcpResult("free-1", tcpMs = -1, failureMessage = "Timed out")
+
+        assertTrue(!result.success)
+        assertEquals(-1, result.pingMs)
+        assertEquals("Timed out", result.message)
     }
 }

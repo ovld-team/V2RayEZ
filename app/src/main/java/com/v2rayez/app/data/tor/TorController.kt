@@ -1,6 +1,9 @@
 package com.v2rayez.app.data.tor
 
 import android.content.Context
+import android.util.Log
+import com.v2rayez.app.data.analytics.FailureCategory
+import com.v2rayez.app.data.analytics.RemoteTelemetry
 import com.v2rayez.app.data.core.AddonPackManager
 import com.v2rayez.app.domain.model.TorConfig
 import com.v2rayez.app.domain.model.TorEngineType
@@ -18,11 +21,30 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
-import java.util.Locale
 import kotlin.coroutines.coroutineContext
-import android.util.Log
+
+internal enum class TorReadinessDecision {
+    READY,
+    WAIT,
+    STOP
+}
+
+/**
+ * Pure readiness policy used by [TorController.awaitReady]. Keeping socket probing outside this
+ * function lets JVM tests exercise bootstrap/log-miss/error behavior without opening sockets.
+ */
+internal fun torReadinessDecision(
+    state: TorState,
+    socksAccepts: Boolean,
+    exitReachable: Boolean
+): TorReadinessDecision = when {
+    state == TorState.ERROR || state == TorState.OFF -> TorReadinessDecision.STOP
+    exitReachable && (state == TorState.CONNECTED || socksAccepts) -> TorReadinessDecision.READY
+    else -> TorReadinessDecision.WAIT
+}
 
 /**
  * Orchestrates the Tor subsystem: selects the requested [TorEngine], resolves bridges for
@@ -38,6 +60,7 @@ class TorController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val bridgeProvider: BridgeProvider,
     private val addonPacks: AddonPackManager,
+    private val remoteTelemetry: RemoteTelemetry,
     nativeC: NativeCTorEngine
 ) {
 
@@ -47,6 +70,45 @@ class TorController @Inject constructor(
 
     private val _status = MutableStateFlow(TorStatus())
     val status: StateFlow<TorStatus> = _status.asStateFlow()
+
+    private fun setError(message: String, engine: TorEngineType, bootstrapPercent: Int = 0) {
+        _status.value = TorStatus(TorState.ERROR, bootstrapPercent, message, engine)
+        runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.TOR, message) }
+        Log.e(TAG, message)
+    }
+
+    /** Emit breadcrumbs at 25/50/75/100% bootstrap only (no host/bridge PII). */
+    private var lastBootstrapBreadcrumb = -1
+
+    private fun noteBootstrap(percent: Int) {
+        val milestone = when {
+            percent >= 100 -> 100
+            percent >= 75 -> 75
+            percent >= 50 -> 50
+            percent >= 25 -> 25
+            else -> return
+        }
+        if (milestone <= lastBootstrapBreadcrumb) return
+        lastBootstrapBreadcrumb = milestone
+        runCatching {
+            remoteTelemetry.addBreadcrumb("tor", "bootstrap $milestone%")
+        }
+    }
+
+    private fun applyStatus(st: TorStatus, engineFallback: TorEngineType) {
+        if (st.state == TorState.ERROR) {
+            setError(
+                st.message.ifBlank { "Tor failed" },
+                st.engine ?: engineFallback,
+                st.bootstrapPercent
+            )
+        } else {
+            if (st.state == TorState.BOOTSTRAPPING || st.state == TorState.CONNECTED) {
+                noteBootstrap(st.bootstrapPercent)
+            }
+            _status.value = st
+        }
+    }
 
     private var active: TorEngine? = null
     private var lastConfig: TorConfig? = null
@@ -98,16 +160,14 @@ class TorController @Inject constructor(
             config.transport != TorTransport.VANILLA &&
             !PluggableTransports.isAvailable(addonPacks, config.transport)
         ) {
-            _status.value = TorStatus(
-                TorState.ERROR,
-                0,
+            setError(
                 "${config.transport.label} not installed — download the pack in Core manager",
                 config.engine
             )
             return@withLock
         }
         val engine = engines[config.engine] ?: run {
-            _status.value = TorStatus(TorState.ERROR, 0, "Unknown Tor engine", config.engine)
+            setError("Unknown Tor engine", config.engine)
             return@withLock
         }
         active = engine
@@ -116,20 +176,16 @@ class TorController @Inject constructor(
         val bridges = resolveBridges(config)
         if (config.transport != TorTransport.DIRECT && bridges.isEmpty()) {
             active = null
-            _status.value = TorStatus(
-                TorState.ERROR,
-                0,
-                "No bridges available for ${config.transport.label}",
-                config.engine
-            )
+            setError("No bridges available for ${config.transport.label}", config.engine)
             return@withLock
         }
 
+        lastBootstrapBreadcrumb = -1
         engine.start(context, config, bridges) { st ->
             val now = _status.value
             // Don't regress CONNECTED → BOOTSTRAPPING from late log lines.
             if (now.state == TorState.CONNECTED && st.state == TorState.BOOTSTRAPPING) return@start
-            _status.value = st
+            applyStatus(st, config.engine)
         }
 
         var ready = awaitReady(config, readyTimeoutMs)
@@ -145,11 +201,12 @@ class TorController @Inject constructor(
                 .filter { it.isNotBlank() && isPlausibleBridgeLine(it) && bridgeMatchesTransport(it, config.transport) }
             if (fresh.isNotEmpty() && fresh != bridges) {
                 engine.stop()
+                lastBootstrapBreadcrumb = -1
                 _status.value = TorStatus(TorState.STARTING, 0, "Rotating bridges…", config.engine)
                 engine.start(context, config, fresh) { st ->
                     val now = _status.value
                     if (now.state == TorState.CONNECTED && st.state == TorState.BOOTSTRAPPING) return@start
-                    _status.value = st
+                    applyStatus(st, config.engine)
                 }
                 ready = awaitReady(config, readyTimeoutMs)
             }
@@ -160,11 +217,10 @@ class TorController @Inject constructor(
             runCatching { engine.stop() }
             if (active === engine) active = null
             if (_status.value.state != TorState.ERROR) {
-                _status.value = TorStatus(
-                    TorState.ERROR,
-                    _status.value.bootstrapPercent,
+                setError(
                     "Tor bootstrap timed out (exit not ready)",
-                    config.engine
+                    config.engine,
+                    bootstrapPercent = _status.value.bootstrapPercent
                 )
             }
         } else {
@@ -194,11 +250,9 @@ class TorController @Inject constructor(
                         config.engine
                     )
                     runCatching { restart(config) }
-                        .onFailure {
-                            _status.value = TorStatus(TorState.ERROR, 0, "Tor process died", config.engine)
-                        }
+                        .onFailure { setError("Tor process died", config.engine) }
                 } else {
-                    _status.value = TorStatus(TorState.ERROR, 0, "Tor process died", config.engine)
+                    setError("Tor process died", config.engine)
                 }
                 break
             }
@@ -231,22 +285,30 @@ class TorController @Inject constructor(
         val deadline = System.currentTimeMillis() + timeoutMs
         var lastExitProbeAt = 0L
         while (coroutineContext.isActive && System.currentTimeMillis() < deadline) {
-            when (_status.value.state) {
+            val state = _status.value.state
+            when (state) {
                 TorState.CONNECTED -> {
                     // Confirm exit once — bootstrap 100% can race before circuits are usable.
-                    if (TorReachability.exitReachable(config, timeoutMs = 8_000)) return true
+                    val exit = TorReachability.exitReachable(config, timeoutMs = 8_000)
+                    if (torReadinessDecision(state, socksAccepts = false, exitReachable = exit) ==
+                        TorReadinessDecision.READY
+                    ) return true
                     // Bootstrap claimed 100% but exit failed — keep waiting a bit.
                     delay(1_000)
                 }
-                TorState.ERROR, TorState.OFF -> return false
+                TorState.ERROR, TorState.OFF -> {
+                    if (torReadinessDecision(state, false, false) == TorReadinessDecision.STOP) {
+                        return false
+                    }
+                }
                 else -> {
                     val now = System.currentTimeMillis()
                     // After SOCKS is up, periodically try exit (log lines may be missing).
                     if (now - lastExitProbeAt >= 5_000) {
                         lastExitProbeAt = now
-                        if (TorReachability.socksAccepts(config, timeoutMs = 800) &&
-                            TorReachability.exitReachable(config, timeoutMs = 6_000)
-                        ) {
+                        val socks = TorReachability.socksAccepts(config, timeoutMs = 800)
+                        val exit = socks && TorReachability.exitReachable(config, timeoutMs = 6_000)
+                        if (torReadinessDecision(state, socks, exit) == TorReadinessDecision.READY) {
                             _status.value = TorStatus(
                                 TorState.CONNECTED,
                                 100,
@@ -296,11 +358,10 @@ class TorController @Inject constructor(
         }
         if (!ok) {
             if (_status.value.state != TorState.CONNECTED) {
-                _status.value = TorStatus(
-                    TorState.ERROR,
-                    _status.value.bootstrapPercent,
+                setError(
                     "Bridge auto-probe failed",
-                    cfg.engine
+                    cfg.engine,
+                    bootstrapPercent = _status.value.bootstrapPercent
                 )
             }
         }

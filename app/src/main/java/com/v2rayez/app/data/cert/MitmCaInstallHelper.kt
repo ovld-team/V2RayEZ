@@ -11,6 +11,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.security.KeyChain
 import androidx.core.content.FileProvider
+import com.v2rayez.app.R
 import java.io.File
 import java.io.FileOutputStream
 
@@ -113,7 +114,7 @@ object MitmCaInstallHelper {
             securitySettingsIntent = securitySettingsIntent(),
             downloadsDisplayName = if (downloadsUri != null) "Downloads/$DOWNLOADS_CRT_NAME" else null,
             downloadsUri = downloadsUri,
-            guideSteps = installGuideSteps(keyChainBlocked),
+            guideSteps = installGuideSteps(context, keyChainBlocked),
             keyChainBlockedByOs = keyChainBlocked
         )
     }
@@ -222,37 +223,38 @@ object MitmCaInstallHelper {
         return "Downloads/$DOWNLOADS_CRT_NAME (${uri})"
     }
 
-    fun installGuideSteps(android11Plus: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R): List<GuideStep> {
+    fun installGuideSteps(
+        context: Context,
+        android11Plus: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+    ): List<GuideStep> {
         val steps = mutableListOf(
             GuideStep(
-                title = "Generate the local CA",
-                body = "V2RayEz creates a private root certificate on this device. The private key never leaves your phone."
+                title = context.getString(R.string.mitm_guide_gen_title),
+                body = context.getString(R.string.mitm_guide_gen_body)
             )
         )
         if (android11Plus) {
             steps += GuideStep(
-                title = "Save or open the certificate file",
-                body = "Android 11+ blocks in-app CA install. Tap Install to open the cert, or Save to Downloads " +
-                    "($DOWNLOADS_CRT_NAME)."
+                title = context.getString(R.string.mitm_guide_save_title),
+                body = context.getString(R.string.mitm_guide_save_body, DOWNLOADS_CRT_NAME)
             )
             steps += GuideStep(
-                title = "Install via Settings",
-                body = "Settings → Security → Encryption & credentials → Install a certificate → CA certificate. " +
-                    "Pick $DOWNLOADS_CRT_NAME (or the .cer file). Confirm with your PIN/pattern."
+                title = context.getString(R.string.mitm_guide_settings_title),
+                body = context.getString(R.string.mitm_guide_settings_body, DOWNLOADS_CRT_NAME)
             )
         } else {
             steps += GuideStep(
-                title = "Tap Install on this device",
-                body = "Android asks for your PIN/pattern/biometric, then shows \"$CA_DISPLAY_NAME\". Confirm to add it."
+                title = context.getString(R.string.mitm_guide_tap_install_title),
+                body = context.getString(R.string.mitm_guide_tap_install_body, CA_DISPLAY_NAME)
             )
         }
         steps += GuideStep(
-            title = "Verify under USER credentials",
-            body = "Settings → Security → Trusted credentials → USER should list \"$CA_DISPLAY_NAME\"."
+            title = context.getString(R.string.mitm_guide_verify_title),
+            body = context.getString(R.string.mitm_guide_verify_body, CA_DISPLAY_NAME)
         )
         steps += GuideStep(
-            title = "Confirm in V2RayEz",
-            body = "Back in Domain Fronting, check \"I've installed it\", then enable fronting."
+            title = context.getString(R.string.mitm_guide_confirm_title),
+            body = context.getString(R.string.mitm_guide_confirm_body)
         )
         return steps
     }

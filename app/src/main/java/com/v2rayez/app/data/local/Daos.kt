@@ -12,6 +12,9 @@ interface ServerDao {
     @Query("SELECT * FROM servers ORDER BY sortOrder ASC, name ASC")
     fun observeAll(): Flow<List<ServerEntity>>
 
+    @Query("SELECT * FROM servers ORDER BY sortOrder ASC, name ASC")
+    suspend fun getAll(): List<ServerEntity>
+
     @Query("SELECT * FROM servers WHERE id = :id")
     suspend fun getById(id: String): ServerEntity?
 
@@ -47,6 +50,9 @@ interface ServerDao {
 interface SubscriptionDao {
     @Query("SELECT * FROM subscriptions ORDER BY name ASC")
     fun observeAll(): Flow<List<SubscriptionEntity>>
+
+    @Query("SELECT * FROM subscriptions ORDER BY name ASC")
+    suspend fun getAll(): List<SubscriptionEntity>
 
     @Query("SELECT * FROM subscriptions WHERE id = :id")
     suspend fun getById(id: String): SubscriptionEntity?

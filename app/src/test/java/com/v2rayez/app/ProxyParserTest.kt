@@ -131,6 +131,61 @@ class ProxyParserTest {
     }
 
     @Test
+    fun preservesTrojanRealityFields() {
+        val uri = "trojan://secret@reality.example:443?security=reality&type=tcp" +
+            "&sni=www.example.com&pbk=PUBLIC_KEY&sid=abcd&spx=%2Fcrawl#Reality"
+        val parsed = ProxyParser.parse(uri)!!
+        assertEquals("PUBLIC_KEY", parsed.publicKey)
+        assertEquals("abcd", parsed.shortId)
+        assertEquals("/crawl", parsed.spiderX)
+        val reparsed = ProxyParser.parse(ProxyParser.toUri(parsed.copy(rawUri = "")))!!
+        assertEquals(parsed.publicKey, reparsed.publicKey)
+        assertEquals(parsed.shortId, reparsed.shortId)
+        assertEquals(parsed.spiderX, reparsed.spiderX)
+    }
+
+    @Test
+    fun preservesShadowsocksSip003Plugin() {
+        val uri = "ss://YWVzLTI1Ni1nY206cGFzcw@ss.example:8388" +
+            "?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Bhost%3Dcdn.example#Plugin"
+        val parsed = ProxyParser.parse(uri)!!
+        assertEquals("v2ray-plugin", parsed.ssPlugin)
+        assertEquals("mode=websocket;host=cdn.example", parsed.ssPluginOptions)
+        val reparsed = ProxyParser.parse(ProxyParser.toUri(parsed.copy(rawUri = "")))!!
+        assertEquals(parsed.ssPlugin, reparsed.ssPlugin)
+        assertEquals(parsed.ssPluginOptions, reparsed.ssPluginOptions)
+    }
+
+    @Test
+    fun vmessSerializerEscapesJsonStrings() {
+        val original = ProxyParser.parse(
+            "vmess://" + Base64.getEncoder().encodeToString(
+                """{"v":"2","ps":"base","add":"v.example","port":"443","id":"id","net":"ws"}""".toByteArray()
+            )
+        )!!.copy(name = "quote \" and slash \\", path = "/a\"b", rawUri = "")
+        val reparsed = ProxyParser.parse(ProxyParser.toUri(original))!!
+        assertEquals(original.name, reparsed.name)
+        assertEquals(original.path, reparsed.path)
+    }
+
+    @Test
+    fun preservesSshPrivateKeyAndWireguardAllowedIps() {
+        val ssh = ProxyParser.parse(
+            "ssh://root@ssh.example:22?pk=" +
+                Base64.getUrlEncoder().withoutPadding().encodeToString("PRIVATE KEY\nline2".toByteArray()) +
+                "#SSH"
+        )!!.copy(rawUri = "")
+        assertEquals(ssh.sshPrivateKey, ProxyParser.parse(ProxyParser.toUri(ssh))!!.sshPrivateKey)
+
+        val wg = ProxyParser.parse(
+            "wireguard://private@wg.example:51820?publickey=peer" +
+                "&address=10.0.0.2%2F32&allowedips=10.0.0.0%2F8%2C192.168.0.0%2F16#WG"
+        )!!.copy(rawUri = "")
+        val reparsedWg = ProxyParser.parse(ProxyParser.toUri(wg))!!
+        assertEquals(listOf("10.0.0.0/8", "192.168.0.0/16"), reparsedWg.wgAllowedIps)
+    }
+
+    @Test
     fun guessesCountryFromRemark() {
         val s = ProxyParser.parse("trojan://pw@jp.example.com:443?security=tls#Japan Fast")!!
         assertEquals("JP", s.countryCode)

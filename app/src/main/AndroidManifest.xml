@@ -16,7 +16,7 @@
 
     <application
         android:name=".V2RayApplication"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -25,10 +25,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.V2RayEz">
 
-        <!-- Disable Sentry ContentProviders' auto-init; we call SentryAndroid.init explicitly. -->
+        <!-- Manual SentryAndroid.init only (blank DSN must never crash via ContentProvider). -->
         <meta-data
             android:name="io.sentry.auto-init"
             android:value="false" />
+        <!-- Structured Logs (also set in RemoteTelemetry options.logs.isEnabled). -->
+        <meta-data
+            android:name="io.sentry.logs.enabled"
+            android:value="true" />
         <provider
             android:name="io.sentry.android.core.SentryInitProvider"
             android:authorities="${applicationId}.SentryInitProvider"
@@ -36,10 +40,6 @@
         <provider
             android:name="io.sentry.android.core.SentryPerformanceProvider"
             android:authorities="${applicationId}.SentryPerformanceProvider"
-            tools:node="remove" />
-        <provider
-            android:name="io.sentry.ndk.SentryNdkPreloadProvider"
-            android:authorities="${applicationId}.SentryNdkPreloadProvider"
             tools:node="remove" />
 
         <!--
@@ -164,6 +164,22 @@
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
+        </provider>
+
+        <!--
+          V2RayApplication implements Configuration.Provider (Hilt-injected WorkerFactory for
+          SubscriptionRefreshWorker's @AssistedInject deps) — remove WorkManager's default eager
+          androidx.startup initializer so it doesn't race the on-demand Configuration.Provider path.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
         </provider>
     </application>
 

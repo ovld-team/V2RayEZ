@@ -25,6 +25,8 @@ data class ServerEntity(
     val uuid: String,
     val password: String,
     val method: String,
+    val ssPlugin: String = "",
+    val ssPluginOptions: String = "",
     val alterId: Int,
     val flow: String,
     val network: String,
@@ -57,6 +59,8 @@ data class ServerEntity(
     val wgPreSharedKey: String = "",
     /** Comma-joined CIDRs, e.g. "10.0.0.2/32,fd00::2/128". */
     val wgLocalAddresses: String = "",
+    /** Comma-joined peer routes from AllowedIPs. */
+    val wgAllowedIps: String = "0.0.0.0/0,::/0",
     /** Comma-joined reserved bytes, e.g. "12,34,56". */
     val wgReserved: String = "",
     val wgMtu: Int = 0,

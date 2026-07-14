@@ -16,8 +16,10 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,9 +38,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Insights
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,6 +76,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -78,9 +87,16 @@ import com.v2rayez.app.ui.SupportedLanguages
 import com.v2rayez.app.ui.components.CardSurface
 import com.v2rayez.app.ui.components.PrimaryButton
 import com.v2rayez.app.ui.components.V2FilterChip
+import com.v2rayez.app.ui.components.V2Switch
 import com.v2rayez.app.ui.components.VSpacer
+import com.v2rayez.app.ui.theme.AccentBlue
+import com.v2rayez.app.ui.theme.AccentGreen
+import com.v2rayez.app.ui.theme.AccentOrange
+import com.v2rayez.app.ui.theme.AccentPink
 import com.v2rayez.app.ui.theme.Connected
+import com.v2rayez.app.ui.theme.MotionTokens
 import com.v2rayez.app.ui.theme.V2RayEzTheme
+import com.v2rayez.app.ui.theme.Violet
 import com.v2rayez.app.ui.theme.accentGradient
 import com.v2rayez.app.ui.viewmodel.OnboardingViewModel
 
@@ -545,71 +561,233 @@ private fun NotificationsPage() {
     }
 }
 
+/** One selectable feature in the [WantsPage] picker. */
+private data class WantFeature(
+    val icon: ImageVector,
+    val accent: Color,
+    val title: String,
+    val description: String,
+    val checked: Boolean,
+    val onToggle: (Boolean) -> Unit
+)
+
 @Composable
 private fun WantsPage(
     wants: OnboardingWants,
     analytics: Boolean,
     onChange: (OnboardingWants, Boolean) -> Unit
 ) {
+    val features = listOf(
+        WantFeature(
+            icon = Icons.Filled.Shield,
+            accent = AccentGreen,
+            title = stringResource(R.string.wizard_want_tor),
+            description = stringResource(R.string.wizard_want_tor_desc),
+            checked = wants.tor,
+            onToggle = { onChange(wants.copy(tor = it), analytics) }
+        ),
+        WantFeature(
+            icon = Icons.Filled.SwapHoriz,
+            accent = AccentPink,
+            title = stringResource(R.string.wizard_want_mitm),
+            description = stringResource(R.string.wizard_want_mitm_desc),
+            checked = wants.mitm,
+            onToggle = { onChange(wants.copy(mitm = it), analytics) }
+        ),
+        WantFeature(
+            icon = Icons.Filled.Public,
+            accent = AccentBlue,
+            title = stringResource(R.string.wizard_want_browser),
+            description = stringResource(R.string.wizard_want_browser_desc),
+            checked = wants.browser,
+            onToggle = { onChange(wants.copy(browser = it), analytics) }
+        ),
+        WantFeature(
+            icon = Icons.Filled.Wifi,
+            accent = AccentOrange,
+            title = stringResource(R.string.wizard_want_hotspot),
+            description = stringResource(R.string.wizard_want_hotspot_desc),
+            checked = wants.hotspot,
+            onToggle = { onChange(wants.copy(hotspot = it), analytics) }
+        ),
+        WantFeature(
+            icon = Icons.Filled.Memory,
+            accent = Violet,
+            title = stringResource(R.string.wizard_want_cores),
+            description = stringResource(R.string.wizard_want_cores_desc),
+            checked = wants.processCores,
+            onToggle = { onChange(wants.copy(processCores = it), analytics) }
+        )
+    )
+    val selectedCount = features.count { it.checked }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .verticalScroll(rememberScrollState())
     ) {
         Text(
             text = stringResource(R.string.wizard_wants_title),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
+            color = MaterialTheme.colorScheme.onBackground
         )
         VSpacer(8)
         Text(
             text = stringResource(R.string.wizard_wants_body),
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        VSpacer(16)
-        WantRow(R.string.wizard_want_tor, wants.tor) {
-            onChange(wants.copy(tor = it), analytics)
+        VSpacer(14)
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.wizard_wants_selected_count, selectedCount, features.size),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
-        WantRow(R.string.wizard_want_mitm, wants.mitm) {
-            onChange(wants.copy(mitm = it), analytics)
+        VSpacer(18)
+        features.forEachIndexed { index, feature ->
+            FeatureSelectCard(feature)
+            if (index != features.lastIndex) VSpacer(10)
         }
-        WantRow(R.string.wizard_want_browser, wants.browser) {
-            onChange(wants.copy(browser = it), analytics)
-        }
-        WantRow(R.string.wizard_want_hotspot, wants.hotspot) {
-            onChange(wants.copy(hotspot = it), analytics)
-        }
-        WantRow(R.string.wizard_want_cores, wants.processCores) {
-            onChange(wants.copy(processCores = it), analytics)
-        }
-        WantRow(R.string.wizard_want_analytics, analytics) {
-            onChange(wants.copy(analytics = it), it)
+        VSpacer(18)
+        AnalyticsOptInCard(
+            checked = analytics,
+            onCheckedChange = { onChange(wants.copy(analytics = it), it) }
+        )
+        VSpacer(4)
+    }
+}
+
+/** Whole-card-tappable feature toggle with an accent icon badge, title and short description. */
+@Composable
+private fun FeatureSelectCard(feature: WantFeature) {
+    val iconBg by animateColorAsState(
+        targetValue = if (feature.checked) feature.accent else feature.accent.copy(alpha = 0.16f),
+        animationSpec = MotionTokens.normal(),
+        label = "featureIconBg"
+    )
+    val iconTint by animateColorAsState(
+        targetValue = if (feature.checked) Color.White else feature.accent,
+        animationSpec = MotionTokens.normal(),
+        label = "featureIconTint"
+    )
+    val cardColor by animateColorAsState(
+        targetValue = if (feature.checked) feature.accent.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant,
+        animationSpec = MotionTokens.normal(),
+        label = "featureCardBg"
+    )
+    CardSurface(
+        modifier = Modifier.fillMaxWidth(),
+        color = cardColor,
+        shape = RoundedCornerShape(18.dp),
+        border = if (feature.checked) BorderStroke(1.5.dp, feature.accent.copy(alpha = 0.55f)) else null
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = { feature.onToggle(!feature.checked) })
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(iconBg),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(feature.icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(22.dp))
+            }
+            Spacer(modifier = Modifier.size(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = feature.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                VSpacer(2)
+                Text(
+                    text = feature.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.size(10.dp))
+            V2Switch(checked = feature.checked, onCheckedChange = feature.onToggle)
         }
     }
 }
 
+/** Lower-emphasis opt-in row for anonymous analytics — visually distinct from the feature list. */
 @Composable
-private fun WantRow(labelRes: Int, checked: Boolean, onChecked: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
+private fun AnalyticsOptInCard(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    CardSurface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
     ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onChecked,
-            colors = CheckboxDefaults.colors(checkedColor = MaterialTheme.colorScheme.primary)
-        )
-        Text(
-            text = stringResource(labelRes),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(start = 4.dp)
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = { onCheckedChange(!checked) })
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Filled.Insights,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.size(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = stringResource(R.string.wizard_want_analytics),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = stringResource(R.string.wizard_wants_optional_label),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                VSpacer(2)
+                Text(
+                    text = stringResource(R.string.wizard_want_analytics_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Spacer(modifier = Modifier.size(10.dp))
+            V2Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
     }
 }
 

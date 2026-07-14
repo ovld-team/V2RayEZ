@@ -107,20 +107,12 @@ class NativeCTorEngine @Inject constructor(
     }
 
     private fun writeTorrc(context: Context, config: TorConfig, bridges: List<String>, dataDir: File): File {
-        val lines = buildList {
-            add("SocksPort ${config.socksHost}:${config.socksPort}")
-            add("DataDirectory ${dataDir.absolutePath}")
-            add("ClientOnly 1")
-            add("AvoidDiskWrites 1")
-            // Required so [readBootstrap] can parse Bootstrapped NN% from stdout.
-            add("Log notice stdout")
-            add("SafeLogging 0")
-            addAll(PluggableTransports.torrcLines(addonPacks, config.transport))
-            bridges.forEach { raw ->
-                val line = raw.trim().removePrefix("Bridge ").trim()
-                if (line.isNotEmpty()) add("Bridge $line")
-            }
-        }
+        val lines = TorrcContent.lines(
+            config = config,
+            dataDirPath = dataDir.absolutePath,
+            ptLines = PluggableTransports.torrcLines(addonPacks, config.transport),
+            bridges = bridges
+        )
         return File(dataDir, "torrc").apply { writeText(lines.joinToString("\n")) }
     }
 

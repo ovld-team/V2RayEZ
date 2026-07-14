@@ -32,12 +32,21 @@
 2. Download `V2RayEZ-v*-release.apk` and install it (unknown sources allowed).
 3. Optional: in the app open **Core manager** and install addon zips from the same Release.
 
-Current RC: [`V2RayEZ-v0.9.80-rc-1`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v0.9.80-rc-1).
+Current release: [`V2RayEZ-v0.9.95`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v0.9.95) (prerelease until owner gates close).
 
 ### Addon packs
 
 Release assets look like `tor-arm64-v8a.zip`, `lyrebird-arm64-v8a.zip`, …  
-The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v0.9.80-rc-1` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Checksums are in `SHA256SUMS.txt`.
+The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v0.9.95` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Local dev uses `gradle.properties`; CI release builds pass the publish tag automatically. Checksums are in `SHA256SUMS.txt`.
+
+### Release notes — v0.9.95
+
+- **Audit remediation:** VPN lifecycle watchdog and reconnect teardown, Tor DNS/ordering fixes, Room schema migrations (no destructive fallback), PII scrub on logs/export/Crashlytics, boot auto-connect gate, MITM race guard, SSRF/size caps on subscription/rule downloads, backup/share warnings.
+- **P7 protocols (pack-gated):** WireGuard, SSH, DNS tunnel, Psiphon, and ByeDPI require Core manager addon zips from the same GitHub Release (`sing-box`, `mihomo`, `dnstt`, `psiphon`, `byedpi`, Tor PT packs as applicable).
+- **Tor:** Code paths improved; treat as **experimental** until maintainer device smoke (full-device HTTPS, Sentry verify) passes.
+- **Clash / Mihomo YAML:** Subscription import for supported proxy nodes.
+- **Subscriptions:** WorkManager periodic refresh plus pull-to-refresh error surfacing.
+- **Still deferred:** hot TUN rebuild without reconnect; full `ViewModels.kt` split; Play Store flavor; Room at-rest encryption (mitigated via `allowBackup=false` + share warnings).
 
 ### Build from source
 
@@ -72,7 +81,7 @@ Release signing needs a local `keystore.properties` pointing at your keystore. N
 1. از صفحه [Releases](https://github.com/ovld-team/V2RayEZ/releases) فایل `V2RayEZ-v*-release.apk` را بگیرید و نصب کنید.
 2. برای بسته‌های افزونه، در اپ به **مدیر هسته** بروید یا زیپ‌های همان Release را نصب کنید.
 
-نسخه فعلی RC: [`V2RayEZ-v0.9.80-rc-1`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v0.9.80-rc-1).
+نسخه فعلی: [`V2RayEZ-v0.9.95`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v0.9.95).
 
 ### ساخت
 

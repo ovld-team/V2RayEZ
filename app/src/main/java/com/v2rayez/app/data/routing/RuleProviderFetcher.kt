@@ -1,5 +1,6 @@
 package com.v2rayez.app.data.routing
 
+import com.v2rayez.app.data.net.UrlSafety
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -14,6 +15,17 @@ object RuleProviderFetcher {
     data class Parsed(val domains: List<String>, val ips: List<String>)
 
     private const val MAX_ENTRIES = 5000
+
+    /** Ruleset bodies are plain text lists — 8 MiB is generous headroom. */
+    private const val MAX_BYTES = 8 * 1024 * 1024
+    private const val MAX_REDIRECTS = 5
+    private val REDIRECT_CODES = setOf(
+        HttpURLConnection.HTTP_MOVED_PERM,
+        HttpURLConnection.HTTP_MOVED_TEMP,
+        HttpURLConnection.HTTP_SEE_OTHER,
+        307,
+        308
+    )
     private val IP_REGEX = Regex("""^\d{1,3}(\.\d{1,3}){3}(/\d{1,2})?$""")
     private val IPV6_HINT = Regex("""^[0-9a-fA-F:]+(/\d{1,3})?$""")
 
@@ -54,21 +66,39 @@ object RuleProviderFetcher {
         return line.takeIf { it.isNotEmpty() && !it.contains(' ') }
     }
 
+    /**
+     * SSRF-guarded, size-capped ruleset fetch. Auto-redirects are disabled so every hop — not
+     * just the original URL — is re-validated against [UrlSafety] before being connected to.
+     */
     @Throws(IOException::class)
     private fun download(url: String): String {
-        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = 15000
-            readTimeout = 20000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "V2RayEz")
+        var current = url
+        repeat(MAX_REDIRECTS + 1) {
+            UrlSafety.assertSafe(current)
+            val conn = (URL(current).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 15000
+                readTimeout = 20000
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "V2RayEz")
+            }
+            try {
+                val code = conn.responseCode
+                if (code in REDIRECT_CODES) {
+                    val location = conn.getHeaderField("Location")
+                        ?: throw IOException("Redirect ($code) missing Location")
+                    current = URL(URL(current), location).toString()
+                    return@repeat
+                }
+                if (code !in 200..299) throw IOException("Fetch failed (HTTP $code)")
+                if (conn.contentLengthLong > MAX_BYTES) {
+                    throw IOException("Response exceeded ${MAX_BYTES / (1024 * 1024)}MB cap")
+                }
+                return UrlSafety.readBounded(conn.inputStream, MAX_BYTES)
+            } finally {
+                conn.disconnect()
+            }
         }
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) throw IOException("Fetch failed (HTTP $code)")
-            return conn.inputStream.bufferedReader().use { it.readText() }
-        } finally {
-            conn.disconnect()
-        }
+        throw IOException("Too many redirects for $url")
     }
 }

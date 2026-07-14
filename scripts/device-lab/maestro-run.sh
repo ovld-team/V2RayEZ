@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Device Lab P8-maestro — run the Maestro flows under maestro/ against a connected
 # device/emulator, writing per-flow logs (+ JUnit XML when supported) into
-# artifacts/device-lab/. Dry-runs gracefully (like collect-debug-bundle.sh) when adb or the
-# maestro CLI aren't available, instead of hard-failing.
+# artifacts/device-lab/. Fail-closed when adb or the maestro CLI aren't available: writes
+# dry-run meta and exits non-zero so lab automation cannot report green without a live run.
 #
 # Usage:
 #   scripts/device-lab/maestro-run.sh                 # run every flow in maestro/
@@ -35,29 +35,29 @@ if ! command -v maestro >/dev/null 2>&1 && [[ -x "$HOME/.maestro/bin/maestro" ]]
 fi
 
 if ! command -v maestro >/dev/null 2>&1; then
-  echo "warn: maestro CLI not on PATH — writing dry-run meta instead of failing the lab run"
+  echo "error: maestro CLI not on PATH — dry-run only; failing closed (exit 1)" >&2
   {
     echo "dry_run: true"
     echo "reason: maestro CLI missing"
     echo "collected_at_utc: $TS"
     echo "hint: curl -Ls \"https://get.maestro.mobile.dev\" | bash; export PATH=\"\$HOME/.maestro/bin:\$PATH\""
   } >"$OUT_DIR/maestro-dry-run-$TS.txt"
-  echo "Wrote $OUT_DIR/maestro-dry-run-$TS.txt"
-  exit 0
+  echo "Wrote $OUT_DIR/maestro-dry-run-$TS.txt" >&2
+  exit 1
 fi
 
 # ${ADB_ARGS[@]+"${ADB_ARGS[@]}"} (not "${ADB_ARGS[@]}") — macOS ships bash 3.2, where
 # expanding an empty array under `set -u` throws "unbound variable"; this is the portable guard.
 if ! command -v adb >/dev/null 2>&1 || ! adb ${ADB_ARGS[@]+"${ADB_ARGS[@]}"} get-state >/dev/null 2>&1; then
-  echo "warn: no device/emulator attached — writing dry-run meta instead of failing the lab run"
+  echo "error: no device/emulator attached — dry-run only; failing closed (exit 1)" >&2
   {
     echo "dry_run: true"
     echo "reason: no device/emulator attached"
     echo "collected_at_utc: $TS"
     echo "hint: scripts/device-lab/avd-up.sh, then ./gradlew :app:installDebug, then re-run"
   } >"$OUT_DIR/maestro-dry-run-$TS.txt"
-  echo "Wrote $OUT_DIR/maestro-dry-run-$TS.txt"
-  exit 0
+  echo "Wrote $OUT_DIR/maestro-dry-run-$TS.txt" >&2
+  exit 1
 fi
 
 FLOWS=()

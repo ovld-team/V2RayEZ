@@ -1,6 +1,7 @@
 package com.v2rayez.app.data.download
 
 import android.util.Log
+import com.v2rayez.app.data.analytics.PiiScrubber
 import com.v2rayez.app.domain.model.DownloadMode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -123,7 +124,9 @@ class DownloadTransport @Inject constructor(
             when (val outcome = download(url, tmp, mode = mode, tag = tag)) {
                 is DownloadOutcome.Success -> tmp.readText(Charsets.UTF_8)
                 is DownloadOutcome.Failed -> {
-                    Log.w(TAG, "downloadText failed: ${outcome.error.message}")
+                    // WARNING+ Logcat is forwarded to Sentry Logs; error.message embeds the URL,
+                    // so scrub before it ever reaches the buffer (14-P0-2).
+                    Log.w(TAG, "downloadText failed: ${PiiScrubber.scrub(outcome.error.message ?: "")}")
                     null
                 }
             }
@@ -146,7 +149,7 @@ class DownloadTransport @Inject constructor(
         val tunnelEndpoint = proxyEndpointProvider?.activeSocksEndpoint()
         val plan = planAttempts(mode, tunnelEndpoint != null)
         if (mode == DownloadMode.THROUGH && tunnelEndpoint == null) {
-            Log.w(TAG, "THROUGH requested but no active tunnel — falling back to DIRECT for $url")
+            Log.w(TAG, "THROUGH requested but no active tunnel — falling back to DIRECT for ${PiiScrubber.scrub(url)}")
         }
         destination.parentFile?.mkdirs()
         val tmp = File(destination.parentFile, "${destination.name}.part")
@@ -182,7 +185,7 @@ class DownloadTransport @Inject constructor(
                         return@withContext DownloadOutcome.Failed(DownloadError.Cancelled(url))
                     }
                     lastError = mapError(url, t)
-                    Log.w(TAG, "download attempt failed ($kind #$attempt): ${lastError.message}")
+                    Log.w(TAG, "download attempt failed ($kind #$attempt): ${PiiScrubber.scrub(lastError.message ?: "")}")
                     val statusErr = lastError as? DownloadError.HttpStatus
                     if (statusErr != null && statusErr.code in 400..499) break
                     if (attempt < attemptsForKind) delay(retryBackoffMs * attempt)

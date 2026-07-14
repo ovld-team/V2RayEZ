@@ -4,7 +4,10 @@ import com.v2rayez.app.domain.model.Protocol
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.ServerGroup
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import java.net.URLDecoder
 import java.util.Base64
 import java.util.UUID
@@ -183,6 +186,9 @@ object ProxyParser {
             alpn = q["alpn"].orEmpty(),
             fingerprint = q["fp"].orEmpty(),
             flow = q["flow"].orEmpty(),
+            publicKey = q["pbk"].orEmpty(),
+            shortId = q["sid"].orEmpty(),
+            spiderX = q["spx"].orEmpty(),
             allowInsecure = q["allowInsecure"] == "1"
         )
     }
@@ -192,6 +198,10 @@ object ProxyParser {
         val withoutScheme = uri.removePrefix("ss://")
         val frag = withoutScheme.substringAfter("#", "").let { decode(it) }
         val main = withoutScheme.substringBefore("#")
+        val query = main.substringAfter("?", "")
+            .split("&")
+            .filter { it.contains("=") }
+            .associate { it.substringBefore("=") to decode(it.substringAfter("=")) }
         var method: String
         var password: String
         var host: String
@@ -216,10 +226,21 @@ object ProxyParser {
             host = hostPart.substringBeforeLast(":")
             port = hostPart.substringAfterLast(":").toIntOrNull() ?: 443
         }
+        val pluginValue = query["plugin"].orEmpty()
         return baseServer(
             name = frag.ifBlank { "$host:$port" }, protocol = Protocol.SHADOWSOCKS, host = host, port = port,
             network = "tcp", streamSecurity = "none", group = group, subId = subId, rawUri = uri
-        ).copy(method = method, password = password)
+        ).copy(
+            method = method,
+            password = password,
+            ssPlugin = pluginValue.substringBefore(";"),
+            ssPluginOptions = pluginValue.substringAfter(";", ""),
+            preferredCore = if (pluginValue.isNotBlank()) {
+                com.v2rayez.app.domain.model.CorePreference.SING_BOX
+            } else {
+                com.v2rayez.app.domain.model.CorePreference.SYSTEM
+            }
+        )
     }
 
     // ---------------------------------------------------------------- SSH
@@ -254,6 +275,8 @@ object ProxyParser {
         val (userInfo, host, port, q, frag, _) = splitStandardUri(uri, scheme)
         val privateKey = (userInfo.ifBlank { q["privatekey"] ?: q["secretkey"] ?: q["private_key"] ?: "" })
         val addresses = (q["address"] ?: q["ip"] ?: "").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        val allowedIps = (q["allowedips"] ?: q["allowed_ips"] ?: "")
+            .split(",").map { it.trim() }.filter { it.isNotEmpty() }
         val reserved = (q["reserved"] ?: "").split(",").mapNotNull { it.trim().toIntOrNull() }
         return baseServer(
             name = frag.ifBlank { "$host:$port" }, protocol = Protocol.WIREGUARD, host = host, port = port,
@@ -263,6 +286,7 @@ object ProxyParser {
             wgPeerPublicKey = q["publickey"] ?: q["public_key"] ?: q["pbk"] ?: "",
             wgPreSharedKey = q["presharedkey"] ?: q["pre_shared_key"] ?: q["psk"] ?: "",
             wgLocalAddresses = addresses.ifEmpty { listOf("10.0.0.2/32") },
+            wgAllowedIps = allowedIps.ifEmpty { listOf("0.0.0.0/0", "::/0") },
             wgReserved = reserved,
             wgMtu = (q["mtu"] ?: "").toIntOrNull() ?: 0,
             preferredCore = com.v2rayez.app.domain.model.CorePreference.SING_BOX
@@ -293,6 +317,9 @@ object ProxyParser {
             wgPeerPublicKey = kv["peer.publickey"] ?: "",
             wgPreSharedKey = kv["peer.presharedkey"] ?: "",
             wgLocalAddresses = addresses.ifEmpty { listOf("10.0.0.2/32") },
+            wgAllowedIps = (kv["peer.allowedips"] ?: "")
+                .split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                .ifEmpty { listOf("0.0.0.0/0", "::/0") },
             wgMtu = (kv["interface.mtu"] ?: "").toIntOrNull() ?: 0,
             preferredCore = com.v2rayez.app.domain.model.CorePreference.SING_BOX
         )
@@ -361,26 +388,40 @@ object ProxyParser {
                 append("#${encode(s.name)}")
             }
             Protocol.TROJAN -> buildString {
-                append("trojan://${s.password}@${s.host}:${s.port}?")
+                append("trojan://${encode(s.password)}@${s.host}:${s.port}?")
                 append("security=${s.streamSecurity.ifBlank { "tls" }}&type=${s.network}")
                 if (s.sni.isNotBlank()) append("&sni=${s.sni}")
                 if (s.path.isNotBlank()) append("&path=${encode(s.path)}")
+                if (s.requestHost.isNotBlank()) append("&host=${encode(s.requestHost)}")
+                if (s.flow.isNotBlank()) append("&flow=${encode(s.flow)}")
+                if (s.fingerprint.isNotBlank()) append("&fp=${encode(s.fingerprint)}")
+                if (s.alpn.isNotBlank()) append("&alpn=${encode(s.alpn)}")
+                if (s.publicKey.isNotBlank()) append("&pbk=${encode(s.publicKey)}")
+                if (s.shortId.isNotBlank()) append("&sid=${encode(s.shortId)}")
+                if (s.spiderX.isNotBlank()) append("&spx=${encode(s.spiderX)}")
+                if (s.allowInsecure) append("&allowInsecure=1")
                 append("#${encode(s.name)}")
             }
-            Protocol.SHADOWSOCKS -> {
+            Protocol.SHADOWSOCKS -> buildString {
                 val creds = encodeBase64("${s.method}:${s.password}")
-                "ss://$creds@${s.host}:${s.port}#${encode(s.name)}"
+                append("ss://$creds@${s.host}:${s.port}")
+                if (s.ssPlugin.isNotBlank()) {
+                    val plugin = listOf(s.ssPlugin, s.ssPluginOptions)
+                        .filter { it.isNotBlank() }.joinToString(";")
+                    append("?plugin=${encode(plugin)}")
+                }
+                append("#${encode(s.name)}")
             }
             Protocol.VMESS -> {
-                // Minimal vmess JSON.
-                val jsonStr = buildString {
-                    append("{")
-                    append("\"v\":\"2\",\"ps\":\"${s.name}\",\"add\":\"${s.host}\",\"port\":\"${s.port}\",")
-                    append("\"id\":\"${s.uuid}\",\"aid\":\"${s.alterId}\",\"scy\":\"${s.method.ifBlank { "auto" }}\",")
-                    append("\"net\":\"${s.network}\",\"type\":\"${s.headerType}\",\"host\":\"${s.requestHost}\",")
-                    append("\"path\":\"${s.path}\",\"tls\":\"${if (s.streamSecurity == "none") "" else s.streamSecurity}\",\"sni\":\"${s.sni}\"")
-                    append("}")
+                val obj = buildJsonObject {
+                    put("v", "2"); put("ps", s.name); put("add", s.host); put("port", s.port.toString())
+                    put("id", s.uuid); put("aid", s.alterId.toString())
+                    put("scy", s.method.ifBlank { "auto" }); put("net", s.network)
+                    put("type", s.headerType); put("host", s.requestHost); put("path", s.path)
+                    put("tls", if (s.streamSecurity == "none") "" else s.streamSecurity)
+                    put("sni", s.sni); put("alpn", s.alpn); put("fp", s.fingerprint)
                 }
+                val jsonStr = json.encodeToString(JsonObject.serializer(), obj)
                 "vmess://${encodeBase64(jsonStr)}"
             }
             Protocol.SSH -> buildString {
@@ -388,7 +429,11 @@ object ProxyParser {
                 append("ssh://${encode(user)}")
                 if (s.password.isNotBlank()) append(":${encode(s.password)}")
                 append("@${s.host}:${s.port}")
-                if (s.sshHostKey.isNotBlank()) append("?hostKey=${encodeBase64(s.sshHostKey)}")
+                val query = buildList {
+                    if (s.sshHostKey.isNotBlank()) add("hostKey=${encodeBase64(s.sshHostKey)}")
+                    if (s.sshPrivateKey.isNotBlank()) add("pk=${encodeBase64(s.sshPrivateKey)}")
+                }
+                if (query.isNotEmpty()) append("?${query.joinToString("&")}")
                 append("#${encode(s.name)}")
             }
             Protocol.WIREGUARD -> buildString {
@@ -396,6 +441,7 @@ object ProxyParser {
                 append("publickey=${encode(s.wgPeerPublicKey)}")
                 if (s.wgPreSharedKey.isNotBlank()) append("&presharedkey=${encode(s.wgPreSharedKey)}")
                 if (s.wgLocalAddresses.isNotEmpty()) append("&address=${encode(s.wgLocalAddresses.joinToString(","))}")
+                if (s.wgAllowedIps.isNotEmpty()) append("&allowedips=${encode(s.wgAllowedIps.joinToString(","))}")
                 if (s.wgReserved.isNotEmpty()) append("&reserved=${s.wgReserved.joinToString(",")}")
                 if (s.wgMtu > 0) append("&mtu=${s.wgMtu}")
                 append("#${encode(s.name)}")

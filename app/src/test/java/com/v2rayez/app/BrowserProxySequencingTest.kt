@@ -1,5 +1,6 @@
 package com.v2rayez.app
 
+import com.v2rayez.app.ui.screens.browser.isAllowedWebViewScheme
 import com.v2rayez.app.ui.screens.browser.shouldDeferInitialLoad
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -57,5 +58,18 @@ class BrowserProxySequencingTest {
                 proxyApplied = false
             )
         )
+    }
+
+    @Test
+    fun allowsOnlyHttpAndHttps() {
+        // SEC-06: block file/content/intent/javascript navigation pivots inside the WebView.
+        assertTrue(isAllowedWebViewScheme("http"))
+        assertTrue(isAllowedWebViewScheme("https"))
+        assertTrue(isAllowedWebViewScheme("HTTPS"))
+        assertFalse(isAllowedWebViewScheme("file"))
+        assertFalse(isAllowedWebViewScheme("content"))
+        assertFalse(isAllowedWebViewScheme("intent"))
+        assertFalse(isAllowedWebViewScheme("javascript"))
+        assertFalse(isAllowedWebViewScheme(null))
     }
 }

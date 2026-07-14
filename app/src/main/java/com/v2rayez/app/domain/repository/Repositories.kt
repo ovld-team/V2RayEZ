@@ -2,6 +2,7 @@ package com.v2rayez.app.domain.repository
 
 import com.v2rayez.app.domain.model.ActivityItem
 import com.v2rayez.app.domain.model.AppSettings
+import com.v2rayez.app.domain.model.BackupSnapshot
 import com.v2rayez.app.domain.model.ConnectionState
 import com.v2rayez.app.domain.model.ImportResult
 import com.v2rayez.app.domain.model.LogEntry
@@ -76,6 +77,16 @@ interface ServerRepository {
     suspend fun addSubscription(name: String, url: String): ImportResult
     suspend fun refreshSubscription(id: String): ImportResult
     suspend fun deleteSubscription(id: String)
+
+    /** Read servers and subscriptions in one database transaction for portable export. */
+    suspend fun backupSnapshot(): BackupSnapshot
+
+    /** Validate and atomically restore the Room-owned portion of a portable backup. */
+    suspend fun restoreBackup(
+        subscriptions: List<Subscription>,
+        manualUris: List<String>,
+        subscriptionServers: Map<String, List<String>>
+    ): ImportResult
 
     /** Enable/disable a subscription (disabled ones are skipped by auto/bulk refresh). */
     suspend fun setSubscriptionEnabled(id: String, enabled: Boolean)

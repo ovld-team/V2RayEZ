@@ -43,6 +43,7 @@ import com.v2rayez.app.domain.model.Protocol
 import com.v2rayez.app.domain.model.ProxyCoreType
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.domain.model.ServerGroup
+import com.v2rayez.app.domain.model.torEffectiveSettings
 import com.v2rayez.app.data.repository.logVpn
 import com.v2rayez.app.domain.repository.LogRepository
 import com.v2rayez.app.domain.repository.ServerRepository
@@ -61,6 +62,8 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -68,6 +71,68 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
+
+internal fun needsReconnectTeardown(
+    tunnelRunning: Boolean,
+    anyEngineRunning: Boolean,
+    tunPresent: Boolean
+): Boolean = tunnelRunning || anyEngineRunning || tunPresent
+
+internal data class TunnelHealthSnapshot(
+    val tunPresent: Boolean = true,
+    val torRequired: Boolean = false,
+    val torConnected: Boolean = true,
+    val domainFrontRequired: Boolean = false,
+    val domainFrontRunning: Boolean = true,
+    val byeDpiRequired: Boolean = false,
+    val byeDpiRunning: Boolean = true,
+    val protocol: Protocol? = null,
+    val processCore: Boolean = false,
+    val primaryEngineHealthy: Boolean = true,
+    val hevHealthy: Boolean = true,
+    val coreLabel: String = "Proxy"
+)
+
+internal fun tunnelDeathReason(snapshot: TunnelHealthSnapshot): String? = with(snapshot) {
+    when {
+        !tunPresent -> "VPN tunnel interface closed unexpectedly"
+        torRequired && !torConnected -> "Tor engine stopped unexpectedly"
+        domainFrontRequired && !domainFrontRunning -> "Domain fronting engine stopped unexpectedly"
+        byeDpiRequired && !byeDpiRunning -> "ByeDPI engine stopped unexpectedly"
+        protocol == Protocol.PSIPHON && !primaryEngineHealthy -> "Psiphon engine stopped unexpectedly"
+        protocol == Protocol.DNSTUNNEL && !primaryEngineHealthy -> "DNS tunnel engine stopped unexpectedly"
+        (protocol == Protocol.PSIPHON || protocol == Protocol.DNSTUNNEL) && !hevHealthy ->
+            "TUN bridge stopped unexpectedly"
+        processCore && !primaryEngineHealthy -> "$coreLabel process stopped unexpectedly"
+        processCore && !hevHealthy -> "TUN bridge stopped unexpectedly"
+        !processCore && !primaryEngineHealthy -> "$coreLabel core stopped unexpectedly"
+        else -> null
+    }
+}
+
+internal fun torSupportsServerProtocol(protocol: Protocol): Boolean =
+    protocol != Protocol.SSH && !protocol.usesStandaloneEngine()
+
+/** Stable peer address advertised to Android while Xray forwards port 53 to Tor DNSPort. */
+internal const val TOR_TUN_DNS_SERVER = "10.10.14.2"
+
+internal fun dnsIpsForTun(settings: AppSettings): List<String> {
+    // VpnService.Builder accepts only an IP and always implies port 53. Advertising
+    // 127.0.0.1 from "127.0.0.1:9053" silently drops Tor's DNSPort and bypasses the TUN.
+    // Use the TUN peer instead; Xray's first-match port-53 rule sends these queries to
+    // dns-out, whose upstream remains 127.0.0.1:<Tor DNSPort>.
+    if (settings.tor.enabled && (settings.enableLocalDns || settings.dns.enableFakeDns)) {
+        return listOf(TOR_TUN_DNS_SERVER)
+    }
+    val ipv4 = Regex("^(?:\\d{1,3}\\.){3}\\d{1,3}$")
+    fun extract(raw: String?): String? {
+        if (raw.isNullOrBlank()) return null
+        val host = raw.substringAfter("//", raw).substringBefore("/").substringBefore(":")
+        return host.takeIf { ipv4.matches(it) }
+    }
+    return listOfNotNull(extract(settings.dns.remoteDns), extract(settings.dns.domesticDns))
+        .distinct()
+}
 
 @AndroidEntryPoint
 class V2RayVpnService : VpnService() {
@@ -84,6 +149,7 @@ class V2RayVpnService : VpnService() {
         private const val STATS_INTERVAL_MS = 1000L
         private const val STATS_INTERVAL_BATTERY_SAVER_MS = 4000L
         private const val PING_INTERVAL_MS = 30_000L
+        private const val WATCHDOG_INTERVAL_MS = 1_000L
         private const val TOR_READY_TIMEOUT_MS = 90_000L
     }
 
@@ -106,10 +172,12 @@ class V2RayVpnService : VpnService() {
     @Inject lateinit var remoteTelemetry: RemoteTelemetry
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val lifecycleMutex = Mutex()
     private var connectJob: Job? = null
     private var tunInterface: ParcelFileDescriptor? = null
     private var statsJob: Job? = null
     private var pingJob: Job? = null
+    private var watchdogJob: Job? = null
     private var activeServer: Server? = null
     private var sessionStartMs: Long = 0L
     /**
@@ -130,6 +198,16 @@ class V2RayVpnService : VpnService() {
     /** True when the active tunnel uses a process core + hev instead of in-process Xray. */
     @Volatile private var usingProcessCore: Boolean = false
     @Volatile private var activeCoreType: ProxyCoreType = ProxyCoreType.XRAY
+    @Volatile private var activeTorRequired: Boolean = false
+    @Volatile private var activeDomainFrontRequired: Boolean = false
+    @Volatile private var activeByeDpiRequired: Boolean = false
+
+    private enum class ProbePolicy(val hardFailure: Boolean, val label: String) {
+        ORDINARY(false, "ordinary"),
+        TOR(true, "Tor"),
+        MITM(false, "MITM"),
+        STANDALONE(false, "standalone")
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // This service is always launched via startForegroundService(), so Android REQUIRES a
@@ -162,9 +240,19 @@ class V2RayVpnService : VpnService() {
         return START_STICKY
     }
 
-    private suspend fun startTunnel(requestedId: String?, generation: Int) {
+    private suspend fun startTunnel(requestedId: String?, generation: Int) =
+        lifecycleMutex.withLock { startTunnelLocked(requestedId, generation) }
+
+    private suspend fun startTunnelLocked(requestedId: String?, generation: Int) {
         try {
-            if (core.isRunning) stopTunnelInternal()
+            if (generation != connectGeneration.get()) return
+            val anyEngineRunning = core.isRunning || processCore.isRunning || hevTunBridge.isRunning ||
+                psiphonEngine.isRunning || dnsTunnelEngine.isRunning || domainFrontEngine.isRunning ||
+                byedpi.isRunning
+            if (needsReconnectTeardown(tunnelRunning(), anyEngineRunning, tunInterface != null)) {
+                stopTunnelInternal()
+            }
+            clearActiveRequirements()
             currentCoroutineContext().ensureActive()
             if (generation != connectGeneration.get()) return
             // While this VPN session owns the TUN, any DIRECT on-demand pack download must be
@@ -180,7 +268,7 @@ class V2RayVpnService : VpnService() {
                     ?: activeXraySocksPort
                 if (port in 1..65535) java.net.InetSocketAddress("127.0.0.1", port) else null
             }
-            val settings = settingsRepository.current()
+            val settings = settingsRepository.current().torEffectiveSettings()
             // Foreground service still requires a notification; honor the user's choice by using
             // the silent channel instead of a fully-alerting ongoing notification.
             notificationsEnabled = settings.notifications
@@ -205,21 +293,17 @@ class V2RayVpnService : VpnService() {
                 failAndStop(reason)
                 return
             }
+            if (settings.tor.enabled && !torSupportsServerProtocol(server.protocol)) {
+                log(LogLevel.WARNING, "Tor is unavailable for ${server.protocol.label}")
+                failAndStop(getString(R.string.vpn_error_tor_xray), category = FailureCategory.TOR)
+                return
+            }
             activeServer = server
             stateHolder.setConnecting(server)
             postNotification(server, getString(R.string.vpn_notif_connecting), getString(R.string.vpn_notif_starting_server, server.name))
             log(LogLevel.INFO, "Connecting to ${server.name} (${server.protocol.label})")
 
             core.onStatus = { _, msg -> if (msg.isNotBlank()) log(LogLevel.DEBUG, msg) }
-
-            currentCoroutineContext().ensureActive()
-            if (generation != connectGeneration.get()) return
-            val tun = establishTun(server, settings)
-            if (tun == null) {
-                failAndStop(getString(R.string.vpn_error_tun))
-                return
-            }
-            tunInterface = tun
 
             val frontServer = server.frontProxyId
                 ?.takeIf { it != server.id }
@@ -255,7 +339,24 @@ class V2RayVpnService : VpnService() {
                     log(LogLevel.INFO, "Reusing running Tor for VPN tunnel")
                     torController.vpnSessionActive = true
                 }
+                activeTorRequired = true
             }
+
+            currentCoroutineContext().ensureActive()
+            if (generation != connectGeneration.get()) {
+                abortConnectCleanup()
+                return
+            }
+            val tun = establishTun(server, settings)
+            if (tun == null) {
+                failAndStop(
+                    getString(R.string.vpn_error_tun),
+                    stopTor = settings.tor.enabled,
+                    category = if (settings.tor.enabled) FailureCategory.TOR else FailureCategory.VPN_CONNECT
+                )
+                return
+            }
+            tunInterface = tun
 
             // Domain fronting / byedpi only apply when we will use in-process Xray.
             // Tor standalone tunnel requires Xray (process cores have no Tor-exit wiring).
@@ -279,7 +380,7 @@ class V2RayVpnService : VpnService() {
                     ProxyCoreType.SING_BOX
                 }
             }
-            if (settings.tor.enabled && coreType != ProxyCoreType.XRAY && !server.protocol.requiresSingBox()) {
+            if (settings.tor.enabled && coreType != ProxyCoreType.XRAY) {
                 log(LogLevel.WARNING, getString(R.string.vpn_tor_forces_xray, coreType.label))
                 coreType = ProxyCoreType.XRAY
             }
@@ -350,6 +451,7 @@ class V2RayVpnService : VpnService() {
                     return
                 }
                 domainFrontRunning = true
+                activeDomainFrontRequired = true
                 log(
                     LogLevel.INFO,
                     "Domain fronting dialer started: ${domainFrontEngine.activeTargetLabel}"
@@ -375,6 +477,7 @@ class V2RayVpnService : VpnService() {
                     failAndStop(getString(R.string.vpn_error_desync))
                     return
                 }
+                activeByeDpiRequired = true
                 log(LogLevel.INFO, "Desync engine (byedpi) started: ${settings.desync.mode.label}")
             }
 
@@ -413,10 +516,14 @@ class V2RayVpnService : VpnService() {
             // full-device Tor session (that's handled in startTorDeviceTunnel).
             activeXraySocksPort = if (useXrayAar) settings.socksPort.takeIf { it in 1..65535 } ?: 0 else 0
 
-            // Probe the live tunnel before advertising Connected — avoids "VPN on, no internet".
-            // Tor-standalone catch-all is slower/flakier — SOCKS-up is enough; exit probe is soft.
+            // Ordinary tunnels soft-fail public generate_204 probes: censorship commonly blocks
+            // the probe hosts even when the selected proxy is usable. Tor catch-all is the only
+            // hard gate because a live SOCKS listener without a working exit/DNS is a false positive.
             val torStandalone = settings.tor.enabled && !(domainFrontRunning && settings.domainFront.enabled)
-            val probeOk = probeTunnelConnectivity(useXrayAar, torStandalone = torStandalone)
+            val probeOk = probeTunnelConnectivity(
+                useXrayAar = useXrayAar,
+                policy = if (torStandalone) ProbePolicy.TOR else ProbePolicy.ORDINARY
+            )
             if (!probeOk) {
                 failAndStop(getString(R.string.vpn_error_no_internet))
                 return
@@ -429,7 +536,8 @@ class V2RayVpnService : VpnService() {
             postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s ↓  0 B/s ↑")
             val ver = if (useXrayAar) core.coreVersion() else processCore.version()
             log(LogLevel.INFO, "Connected via ${coreType.label}. Core $ver")
-            startStatsLoop(settings.batterySaver)
+            startStatsLoop(settings.batterySaver, generation)
+            startDeathWatchdog(generation)
         } catch (ce: CancellationException) {
             log(LogLevel.INFO, "Connect cancelled")
             // Superseded by a newer connect (generation bumped): the winner tears down the old
@@ -521,19 +629,15 @@ class V2RayVpnService : VpnService() {
             return
         }
 
-        // Soft connectivity probe: MITM routing is fronted per-rule, so a slow/failed probe
-        // must not tear down an otherwise-live tunnel (mirrors the Tor-standalone policy).
-        delay(400)
-        val ms = core.measureConnectedDelay()
-        if (ms > 0) stateHolder.setPing(ms.toInt())
-        else log(LogLevel.WARNING, "MITM tunnel up but connectivity probe timed out — connecting anyway")
+        probeTunnelConnectivity(useXrayAar = true, policy = ProbePolicy.MITM)
 
         sessionStartMs = System.currentTimeMillis()
         stateHolder.setConnected(server)
         reflectAlwaysOnState()
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
         log(LogLevel.INFO, "Connected via MITM Domain Fronting. Core ${core.coreVersion()}")
-        startStatsLoop(settings.batterySaver)
+        startStatsLoop(settings.batterySaver, generation)
+        startDeathWatchdog(generation)
     }
 
     /**
@@ -564,8 +668,9 @@ class V2RayVpnService : VpnService() {
 
         core.onStatus = { _, msg -> if (msg.isNotBlank()) log(LogLevel.DEBUG, msg) }
 
-        // Force full-device for this session (ignore per-app bypass lists).
-        val tunnelSettings = settings.copy(fullDeviceTunnel = true)
+        // DNS hardening is already shared by torEffectiveSettings(); this path additionally
+        // ignores per-app selection because it is explicitly the whole-device Tor mode.
+        val tunnelSettings = settings.torEffectiveSettings().copy(fullDeviceTunnel = true)
 
         currentCoroutineContext().ensureActive()
         if (generation != connectGeneration.get()) return
@@ -593,6 +698,7 @@ class V2RayVpnService : VpnService() {
             log(LogLevel.INFO, "Reusing running Tor for full-device tunnel")
             torController.vpnSessionActive = true
         }
+        activeTorRequired = true
 
         currentCoroutineContext().ensureActive()
         if (generation != connectGeneration.get()) {
@@ -639,7 +745,7 @@ class V2RayVpnService : VpnService() {
         // Xray socks inbound (→ Tor catch-all) is a valid download proxy here too.
         activeXraySocksPort = tunnelSettings.socksPort.takeIf { it in 1..65535 } ?: 0
 
-        if (!probeTunnelConnectivity(useXrayAar = true, torStandalone = true)) {
+        if (!probeTunnelConnectivity(useXrayAar = true, policy = ProbePolicy.TOR)) {
             failAndStop(getString(R.string.vpn_error_no_internet), stopTor = true, category = FailureCategory.TOR)
             return
         }
@@ -649,7 +755,8 @@ class V2RayVpnService : VpnService() {
         reflectAlwaysOnState()
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
         log(LogLevel.INFO, "Connected via Tor full-device. Core ${core.coreVersion()}")
-        startStatsLoop(settings.batterySaver)
+        startStatsLoop(settings.batterySaver, generation)
+        startDeathWatchdog(generation)
     }
 
     /** Synthetic loopback server used for MITM sessions so UI/state/notifications have a subject. */
@@ -793,13 +900,19 @@ class V2RayVpnService : VpnService() {
             failAndStop(getString(R.string.vpn_error_protocol_engine, engineLabel))
             return
         }
+        probeTunnelConnectivity(
+            useXrayAar = false,
+            policy = ProbePolicy.STANDALONE,
+            socksPortOverride = socksPort
+        )
         sessionStartMs = System.currentTimeMillis()
         stateHolder.setConnected(server)
         reflectAlwaysOnState()
         settingsRepository.update { it.copy(lastServerId = server.id) }
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
         log(LogLevel.INFO, "Connected via $engineLabel")
-        startStatsLoop(settings.batterySaver)
+        startStatsLoop(settings.batterySaver, generation)
+        startDeathWatchdog(generation)
     }
 
     private fun stopCoresBlocking() {
@@ -820,6 +933,8 @@ class V2RayVpnService : VpnService() {
         statsJob = null
         pingJob?.cancel()
         pingJob = null
+        watchdogJob?.cancel()
+        watchdogJob = null
         runCatching { runBlocking { byedpi.stop() } }
         runCatching { domainFrontEngine.stop() }
         torController.vpnSessionActive = false
@@ -832,6 +947,7 @@ class V2RayVpnService : VpnService() {
         stopCoresBlocking()
         usingProcessCore = false
         activeXraySocksPort = 0
+        clearActiveRequirements()
         runCatching { tunInterface?.close() }
         tunInterface = null
         activeServer = null
@@ -847,11 +963,16 @@ class V2RayVpnService : VpnService() {
     ) {
         log(LogLevel.ERROR, message)
         runCatching { remoteTelemetry.captureVpnFailure(category, message) }
+        // A watchdog failure can happen after a long valid session. Persist its final counters
+        // before setError() resets the state-holder totals.
+        runCatching { runBlocking { recordSession() } }
         stateHolder.setError(message)
         statsJob?.cancel()
         statsJob = null
         pingJob?.cancel()
         pingJob = null
+        watchdogJob?.cancel()
+        watchdogJob = null
         runCatching { runBlocking { byedpi.stop() } }
         runCatching { domainFrontEngine.stop() }
         torController.vpnSessionActive = false
@@ -864,6 +985,7 @@ class V2RayVpnService : VpnService() {
         stopCoresBlocking()
         usingProcessCore = false
         activeXraySocksPort = 0
+        clearActiveRequirements()
         runCatching { tunInterface?.close() }
         tunInterface = null
         activeServer = null
@@ -882,7 +1004,8 @@ class V2RayVpnService : VpnService() {
             builder.addAddress("fdfe:dcba:9876::1", 126)
             builder.addRoute("::", 0)
         }
-        // DNS: only IP literals are valid for the tun interface. Strip DoH URLs to host IPs.
+        // DNS: only IP literals are valid for the tun interface. Tor uses a stable TUN peer
+        // here so Android's implicit :53 reaches Xray, then dns-out reaches Tor's real DNSPort.
         val dnsIps = dnsIpsForTun(settings).ifEmpty { listOf("1.1.1.1", "8.8.8.8") }
         dnsIps.forEach { runCatching { builder.addDnsServer(it) } }
 
@@ -895,77 +1018,70 @@ class V2RayVpnService : VpnService() {
         }.getOrNull()
     }
 
-    /** Extract IPv4 DNS servers from settings for VpnService.Builder.addDnsServer. */
-    private fun dnsIpsForTun(settings: AppSettings): List<String> {
-        val ipv4 = Regex("^(?:\\d{1,3}\\.){3}\\d{1,3}$")
-        fun extract(raw: String?): String? {
-            if (raw.isNullOrBlank()) return null
-            val host = raw.substringAfter("//", raw).substringBefore("/").substringBefore(":")
-            return host.takeIf { ipv4.matches(it) }
-        }
-        return listOfNotNull(extract(settings.dns.remoteDns), extract(settings.dns.domesticDns))
-            .distinct()
-    }
-
     /**
-     * Confirm the tunnel can reach the public internet before marking Connected.
-     * Xray: in-core measureDelay. Process cores: SOCKS HTTP HEAD.
+     * One connectivity policy for every tunnel mode.
      *
-     * When [torStandalone] is true, all app traffic is routed via Tor — gstatic probes are
-     * slow/flaky. Require Tor SOCKS up; treat exit latency as soft (log-only).
+     * Ordinary Xray/process, MITM, and standalone addon tunnels soft-fail because public
+     * generate_204 hosts are frequently blocked by the censorship the app is bypassing. Tor is a
+     * hard gate: both its SOCKS listener and an exit HTTP request must work before CONNECTED.
      */
-    private suspend fun probeTunnelConnectivity(useXrayAar: Boolean, torStandalone: Boolean): Boolean {
+    private suspend fun probeTunnelConnectivity(
+        useXrayAar: Boolean,
+        policy: ProbePolicy,
+        socksPortOverride: Int? = null
+    ): Boolean {
         delay(150) // let gVisor/hev settle
-        if (torStandalone) {
+        val urls = listOf(
+            "https://www.gstatic.com/generate_204",
+            "https://cp.cloudflare.com/generate_204",
+            "http://connectivitycheck.gstatic.com/generate_204"
+        )
+        if (policy == ProbePolicy.TOR) {
             val torCfg = settingsRepository.current().tor
             val socksOk = torController.testSocksReachable(torCfg, timeoutMs = 4_000)
             if (!socksOk) {
                 log(LogLevel.ERROR, "Connectivity probe failed (Tor SOCKS down)")
                 return false
             }
-            // Soft exit probe — do not fail connect if Tor exit is slow.
-            val soft = if (useXrayAar) {
-                core.measureConnectedDelay("https://www.gstatic.com/generate_204")
+            for (url in urls) {
+                val ms = if (useXrayAar) {
+                    core.measureConnectedDelay(url)
+                } else {
+                    processCore.measureViaSocks(
+                        processCore.localSocksPort().takeIf { it > 0 } ?: torCfg.socksPort,
+                        url,
+                        timeoutMs = 15_000
+                    )
+                }
+                if (ms > 0) {
+                    stateHolder.setPing(ms.toInt())
+                    return true
+                }
+                delay(200)
+            }
+            log(LogLevel.ERROR, "Connectivity probe failed (Tor exit / DNS)")
+            return false
+        }
+
+        val port = socksPortOverride?.takeIf { it in 1..65535 }
+            ?: processCore.localSocksPort().takeIf { it in 1..65535 }
+            ?: settingsRepository.current().socksPort
+        for (url in urls) {
+            val ms = if (useXrayAar) {
+                core.measureConnectedDelay(url)
             } else {
-                processCore.measureViaSocks(
-                    processCore.localSocksPort().takeIf { it > 0 } ?: torCfg.socksPort,
-                    "https://www.gstatic.com/generate_204",
-                    timeoutMs = 15_000
-                )
+                processCore.measureViaSocks(port, url)
             }
-            if (soft > 0) stateHolder.setPing(soft.toInt())
-            else log(LogLevel.WARNING, "Tor SOCKS up but exit probe timed out — connecting anyway")
-            return true
+            if (ms > 0) {
+                stateHolder.setPing(ms.toInt())
+                return true
+            }
+            delay(100)
         }
-        val urls = listOf(
-            "https://www.gstatic.com/generate_204",
-            "https://cp.cloudflare.com/generate_204",
-            "http://connectivitycheck.gstatic.com/generate_204"
-        )
-        return if (useXrayAar) {
-            for (url in urls) {
-                val ms = core.measureConnectedDelay(url)
-                if (ms > 0) {
-                    stateHolder.setPing(ms.toInt())
-                    return true
-                }
-                delay(100)
-            }
-            log(LogLevel.ERROR, "Connectivity probe failed (Xray)")
-            false
-        } else {
-            val port = processCore.localSocksPort().takeIf { it > 0 }
-                ?: settingsRepository.current().socksPort
-            for (url in urls) {
-                val ms = processCore.measureViaSocks(port, url)
-                if (ms > 0) {
-                    stateHolder.setPing(ms.toInt())
-                    return true
-                }
-            }
-            log(LogLevel.ERROR, "Connectivity probe failed (process-core SOCKS port=$port)")
-            false
-        }
+        val endpoint = if (useXrayAar) "Xray" else "SOCKS port=$port"
+        val level = if (policy.hardFailure) LogLevel.ERROR else LogLevel.WARNING
+        log(level, "${policy.label} connectivity probe failed ($endpoint) — keeping live tunnel")
+        return !policy.hardFailure
     }
 
     /**
@@ -996,18 +1112,19 @@ class V2RayVpnService : VpnService() {
         )
     }
 
-    private fun startStatsLoop(batterySaver: Boolean) {
+    private fun startStatsLoop(batterySaver: Boolean, generation: Int) {
         statsJob?.cancel()
         pingJob?.cancel()
         val intervalMs = if (batterySaver) STATS_INTERVAL_BATTERY_SAVER_MS else STATS_INTERVAL_MS
         statsJob = scope.launch {
-            while (isActive && tunnelRunning()) {
+            while (isActive && generation == connectGeneration.get() && tunnelRunning()) {
                 val (down, up) = if (usingProcessCore || standaloneEngineRunning()) {
-                    hevTunBridge.queryBytes()
+                    hevTunBridge.queryDeltaBytes()
                 } else {
                     val snap = core.queryTrafficStats()
                     snap.totalDown to snap.totalUp
                 }
+                if (generation != connectGeneration.get()) return@launch
                 stateHolder.onStatsTick(down, up, intervalMs / 1000.0)
                 val st = stateHolder.connectionState.value
                 val speedLine = "${st.downloadLabel} \u2193  ${st.uploadLabel} \u2191"
@@ -1022,17 +1139,78 @@ class V2RayVpnService : VpnService() {
             }
         }
         pingJob = scope.launch {
-            while (isActive && tunnelRunning()) {
+            while (isActive && generation == connectGeneration.get() && tunnelRunning()) {
                 val ms = when {
                     psiphonEngine.isRunning -> processCore.measureViaSocks(psiphonEngine.localSocksPort())
                     dnsTunnelEngine.isRunning -> processCore.measureViaSocks(dnsTunnelEngine.localTcpPort())
                     usingProcessCore -> processCore.measureViaSocks(processCore.localSocksPort())
                     else -> core.measureConnectedDelay()
                 }
+                if (generation != connectGeneration.get()) return@launch
                 if (ms > 0) stateHolder.setPing(ms.toInt())
                 delay(PING_INTERVAL_MS)
             }
         }
+    }
+
+    private fun startDeathWatchdog(generation: Int) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            while (isActive && generation == connectGeneration.get()) {
+                delay(WATCHDOG_INTERVAL_MS)
+                if (generation != connectGeneration.get()) return@launch
+                lifecycleMutex.withLock {
+                    if (generation != connectGeneration.get()) return@launch
+                    if (stateHolder.connectionState.value.status != com.v2rayez.app.domain.model.ConnectionStatus.CONNECTED) {
+                        return@withLock
+                    }
+                    val reason = tunnelDeathReason() ?: return@withLock
+                    if (generation != connectGeneration.get()) return@launch
+                    val serverId = activeServer?.id
+                    failAndStop(
+                        message = reason,
+                        stopTor = serverId == "tor-device",
+                        category = when (serverId) {
+                            "tor-device" -> FailureCategory.TOR
+                            "mitm" -> FailureCategory.MITM
+                            else -> FailureCategory.VPN_CONNECT
+                        }
+                    )
+                }
+                if (stateHolder.connectionState.value.status != com.v2rayez.app.domain.model.ConnectionStatus.CONNECTED) return@launch
+            }
+        }
+    }
+
+    private fun tunnelDeathReason(): String? {
+        val protocol = activeServer?.protocol
+        val primaryHealthy = when (protocol) {
+            Protocol.PSIPHON -> psiphonEngine.isRunning
+            Protocol.DNSTUNNEL -> dnsTunnelEngine.isRunning
+            else -> if (usingProcessCore) processCore.isHealthy else core.isRunning
+        }
+        return tunnelDeathReason(
+            TunnelHealthSnapshot(
+                tunPresent = tunInterface != null,
+                torRequired = activeTorRequired,
+                torConnected = torController.status.value.state == TorState.CONNECTED,
+                domainFrontRequired = activeDomainFrontRequired,
+                domainFrontRunning = domainFrontEngine.isRunning,
+                byeDpiRequired = activeByeDpiRequired,
+                byeDpiRunning = byedpi.isRunning,
+                protocol = protocol,
+                processCore = usingProcessCore,
+                primaryEngineHealthy = primaryHealthy,
+                hevHealthy = hevTunBridge.isHealthy(),
+                coreLabel = activeCoreType.label
+            )
+        )
+    }
+
+    private fun clearActiveRequirements() {
+        activeTorRequired = false
+        activeDomainFrontRequired = false
+        activeByeDpiRequired = false
     }
 
     /** Psiphon / DNS-tunnel PIE + hev TUN — not `ProcessProxyCore`. */
@@ -1046,7 +1224,15 @@ class V2RayVpnService : VpnService() {
     }
 
     private fun stopTunnel() {
-        scope.launch { stopTunnelInternal(); stopSelf() }
+        connectJob?.cancel()
+        connectJob = null
+        connectGeneration.incrementAndGet()
+        scope.launch {
+            lifecycleMutex.withLock {
+                stopTunnelInternal()
+                stopSelf()
+            }
+        }
     }
 
     private suspend fun stopTunnelInternal() {
@@ -1054,6 +1240,8 @@ class V2RayVpnService : VpnService() {
         statsJob = null
         pingJob?.cancel()
         pingJob = null
+        watchdogJob?.cancel()
+        watchdogJob = null
         runCatching { byedpi.stop() }
         runCatching { domainFrontEngine.stop() }
         torController.vpnSessionActive = false
@@ -1075,6 +1263,7 @@ class V2RayVpnService : VpnService() {
         }
         usingProcessCore = false
         activeXraySocksPort = 0
+        clearActiveRequirements()
         runCatching { tunInterface?.close() }
         tunInterface = null
         recordSession()
@@ -1117,20 +1306,31 @@ class V2RayVpnService : VpnService() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        stopTunnel()
+        val establishedForegroundVpn = tunInterface != null &&
+            stateHolder.connectionState.value.status == com.v2rayez.app.domain.model.ConnectionStatus.CONNECTED &&
+            tunnelRunning()
+        if (establishedForegroundVpn) {
+            log(LogLevel.INFO, "Task removed; keeping established foreground VPN active")
+        } else {
+            stopTunnel()
+        }
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
-        connectJob?.cancel()
+        val pendingConnect = connectJob
+        pendingConnect?.cancel()
         connectJob = null
         statsJob?.cancel()
         statsJob = null
         pingJob?.cancel()
         pingJob = null
+        watchdogJob?.cancel()
+        watchdogJob = null
         downloadTransport.setSocketProtector(null)
         downloadTransport.setProxyEndpointProvider(null)
         runBlocking {
+            runCatching { pendingConnect?.join() }
             runCatching {
                 recordSession()
                 stateHolder.setDisconnected()
@@ -1143,7 +1343,10 @@ class V2RayVpnService : VpnService() {
                 runCatching { torController.stop() }
             }
         }
-        runCatching { core.stopLoopBlocking() }
+        stopCoresBlocking()
+        usingProcessCore = false
+        activeXraySocksPort = 0
+        clearActiveRequirements()
         runCatching { tunInterface?.close() }
         tunInterface = null
         scope.cancel()

@@ -26,8 +26,40 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import javax.inject.Inject
 import javax.inject.Singleton
+
+internal data class PendingTrafficBatch(val down: Long, val up: Long)
+
+/**
+ * Atomically accumulates and drains traffic so stats ticks and lifecycle flushes cannot
+ * snapshot or clear the same bytes concurrently.
+ */
+internal class PendingTrafficAccumulator {
+    private val lock = Any()
+    private var down = 0L
+    private var up = 0L
+    private var ticks = 0
+
+    fun add(downDelta: Long, upDelta: Long): PendingTrafficBatch? = synchronized(lock) {
+        down += downDelta
+        up += upDelta
+        ticks++
+        if (ticks >= 10 || down + up > 5_000_000L) drainLocked() else null
+    }
+
+    fun drain(): PendingTrafficBatch? = synchronized(lock) { drainLocked() }
+
+    private fun drainLocked(): PendingTrafficBatch? {
+        if (down <= 0L && up <= 0L) return null
+        return PendingTrafficBatch(down, up).also {
+            down = 0L
+            up = 0L
+            ticks = 0
+        }
+    }
+}
 
 /**
  * Process-wide, observable VPN state shared between [V2RayVpnService] and the
@@ -88,12 +120,11 @@ class VpnStateHolder @Inject constructor(
 
     @Volatile private var connectStartMs: Long = 0L
     @Volatile private var trafficWeekOfYear: Int = currentWeekOfYear()
+    private val sessionGeneration = AtomicLong()
 
     // Batched daily-traffic persistence: accumulate deltas and flush every few ticks
     // to keep Room writes off the per-second hot path.
-    private var pendingDown: Long = 0L
-    private var pendingUp: Long = 0L
-    private var pendingTicks: Int = 0
+    private val pendingTraffic = PendingTrafficAccumulator()
 
     fun setConnecting(server: Server) {
         _connectionState.update { DISCONNECTED.copy(status = ConnectionStatus.CONNECTING, server = server) }
@@ -161,22 +192,22 @@ class VpnStateHolder @Inject constructor(
     }
 
     private fun resetSessionCounters() {
+        sessionGeneration.incrementAndGet()
         _sessionDown.value = 0L
         _sessionUp.value = 0L
         _flushedSessionDown.value = 0L
         _flushedSessionUp.value = 0L
-        pendingDown = 0L
-        pendingUp = 0L
-        pendingTicks = 0
     }
 
     /** Called by the service stats loop (~1 Hz) with per-interval byte deltas. */
     fun onStatsTick(downDelta: Long, upDelta: Long, intervalSeconds: Double) {
         if (_connectionState.value.status != ConnectionStatus.CONNECTED) return
-        _sessionDown.update { it + downDelta }
-        _sessionUp.update { it + upDelta }
-        val downRate = if (intervalSeconds > 0) (downDelta / intervalSeconds).toLong() else 0L
-        val upRate = if (intervalSeconds > 0) (upDelta / intervalSeconds).toLong() else 0L
+        val safeDownDelta = downDelta.coerceAtLeast(0L)
+        val safeUpDelta = upDelta.coerceAtLeast(0L)
+        _sessionDown.update { it + safeDownDelta }
+        _sessionUp.update { it + safeUpDelta }
+        val downRate = if (intervalSeconds > 0) (safeDownDelta / intervalSeconds).toLong() else 0L
+        val upRate = if (intervalSeconds > 0) (safeUpDelta / intervalSeconds).toLong() else 0L
         val uptime = if (connectStartMs > 0) (System.currentTimeMillis() - connectStartMs) / 1000 else 0L
         _connectionState.update {
             it.copy(
@@ -191,8 +222,8 @@ class VpnStateHolder @Inject constructor(
         _liveThroughput.update { samples ->
             (samples + ThroughputSample(downRate, upRate)).takeLast(LIVE_WINDOW)
         }
-        addToToday(downDelta, upDelta)
-        persistDaily(downDelta, upDelta)
+        addToToday(safeDownDelta, safeUpDelta)
+        persistDaily(safeDownDelta, safeUpDelta)
         notifyWidgetsThrottled()
     }
 
@@ -206,25 +237,29 @@ class VpnStateHolder @Inject constructor(
 
     /** Accumulate byte deltas and flush to the daily-traffic table every few ticks. */
     private fun persistDaily(downDelta: Long, upDelta: Long) {
-        pendingDown += downDelta
-        pendingUp += upDelta
-        pendingTicks++
-        if (pendingTicks >= 10 || pendingDown + pendingUp > 5_000_000L) {
-            flushPendingTraffic()
+        pendingTraffic.add(downDelta, upDelta)?.let {
+            persistTrafficBatch(it, sessionGeneration.get())
         }
     }
 
     private fun flushPendingTraffic() {
-        val down = pendingDown
-        val up = pendingUp
-        pendingDown = 0L
-        pendingUp = 0L
-        pendingTicks = 0
-        if (down <= 0L && up <= 0L) return
-        _flushedSessionDown.update { it + down }
-        _flushedSessionUp.update { it + up }
+        pendingTraffic.drain()?.let {
+            persistTrafficBatch(it, sessionGeneration.get())
+        }
+    }
+
+    private fun persistTrafficBatch(batch: PendingTrafficBatch, generation: Long) {
         val day = currentEpochDay()
-        ioScope.launch { runCatching { dailyTrafficDao.addTraffic(day, down, up) } }
+        ioScope.launch {
+            runCatching { dailyTrafficDao.addTraffic(day, batch.down, batch.up) }
+                .onSuccess {
+                    // Advance chart accounting only after Room has acknowledged the batch.
+                    if (sessionGeneration.get() == generation) {
+                        _flushedSessionDown.update { it + batch.down }
+                        _flushedSessionUp.update { it + batch.up }
+                    }
+                }
+        }
     }
 
     private fun currentEpochDay(): Long = java.time.LocalDate.now().toEpochDay()

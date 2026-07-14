@@ -77,6 +77,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var picker by remember { mutableStateOf<String?>(null) }
+    var pendingBackupAction by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -186,11 +187,11 @@ fun SettingsScreen(
                 SettingRow(Icons.Filled.BarChart, stringResource(R.string.settings_statistics), subtitle = stringResource(R.string.settings_statistics_sub), onClick = onOpenStatistics)
                 Divider()
                 SettingRow(Icons.Filled.Backup, stringResource(R.string.settings_backup), subtitle = stringResource(R.string.settings_backup_sub), onClick = {
-                    exportLauncher.launch("v2rayez-backup.json")
+                    pendingBackupAction = "export"
                 })
                 Divider()
                 SettingRow(Icons.Filled.Restore, stringResource(R.string.settings_restore), subtitle = stringResource(R.string.settings_restore_sub), onClick = {
-                    importLauncher.launch(arrayOf("application/json", "text/*"))
+                    pendingBackupAction = "restore"
                 })
                 Divider()
                 SettingRow(Icons.Filled.Info, stringResource(R.string.settings_about), onClick = onOpenAbout)
@@ -222,6 +223,51 @@ fun SettingsScreen(
             selected = state.accentColor,
             onSelect = { viewModel.setAccent(it); picker = null },
             onDismiss = { picker = null }
+        )
+    }
+
+    pendingBackupAction?.let { action ->
+        val exporting = action == "export"
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingBackupAction = null },
+            title = {
+                androidx.compose.material3.Text(
+                    stringResource(
+                        if (exporting) R.string.settings_backup_confirm_title
+                        else R.string.settings_restore_confirm_title
+                    )
+                )
+            },
+            text = {
+                androidx.compose.material3.Text(
+                    stringResource(
+                        if (exporting) R.string.settings_backup_credential_warning
+                        else R.string.settings_restore_credential_warning
+                    )
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    pendingBackupAction = null
+                    if (exporting) {
+                        exportLauncher.launch("v2rayez-backup.json")
+                    } else {
+                        importLauncher.launch(arrayOf("application/json", "text/*"))
+                    }
+                }) {
+                    androidx.compose.material3.Text(
+                        stringResource(
+                            if (exporting) R.string.settings_backup_confirm
+                            else R.string.settings_restore_confirm
+                        )
+                    )
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { pendingBackupAction = null }) {
+                    androidx.compose.material3.Text(stringResource(R.string.action_cancel))
+                }
+            }
         )
     }
 }

@@ -107,6 +107,7 @@ fun ServersScreen(
     val state by viewModel.state.collectAsState()
     val refreshing by viewModel.refreshing.collectAsState()
     val lastPingMessage by viewModel.lastPingMessage.collectAsState()
+    val refreshError by viewModel.refreshError.collectAsState()
     var connectTarget by remember { mutableStateOf<Server?>(null) }
     var menuTarget by remember { mutableStateOf<Server?>(null) }
     var qrTarget by remember { mutableStateOf<Server?>(null) }
@@ -116,6 +117,7 @@ fun ServersScreen(
     var manageSubscriptionId by remember { mutableStateOf<String?>(null) }
     var manageGroupName by remember { mutableStateOf<String?>(null) }
     var showMoveSelected by remember { mutableStateOf(false) }
+    var pendingShareText by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
     var collapsed by remember { mutableStateOf(loadCollapsed(context)) }
@@ -135,6 +137,12 @@ fun ServersScreen(
         viewModel.clearPingMessage()
     }
 
+    androidx.compose.runtime.LaunchedEffect(refreshError) {
+        val msg = refreshError ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(msg)
+        viewModel.clearRefreshError()
+    }
+
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             if (state.selectionMode) {
@@ -146,8 +154,7 @@ fun ServersScreen(
                     onMove = { showMoveSelected = true },
                     onShare = {
                         val text = viewModel.exportSelected()
-                        if (text.isNotBlank()) shareText(context, text)
-                        viewModel.clearSelection()
+                        if (text.isNotBlank()) pendingShareText = text
                     },
                     onDelete = viewModel::deleteSelected
                 )
@@ -313,7 +320,7 @@ fun ServersScreen(
             },
             onDuplicate = { viewModel.duplicate(s.id); menuTarget = null },
             onShare = {
-                shareText(context, viewModel.exportUri(s))
+                pendingShareText = viewModel.exportUri(s)
                 menuTarget = null
             },
             onQr = { qrTarget = s; menuTarget = null },
@@ -327,6 +334,27 @@ fun ServersScreen(
             title = s.name,
             content = viewModel.exportUri(s),
             onDismiss = { qrTarget = null }
+        )
+    }
+    pendingShareText?.let { content ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { pendingShareText = null },
+            title = { Text(stringResource(R.string.servers_share_confirm_title)) },
+            text = { Text(stringResource(R.string.servers_share_credential_warning)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingShareText = null
+                    shareText(context, content)
+                    viewModel.clearSelection()
+                }) {
+                    Text(stringResource(R.string.action_share))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingShareText = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
         )
     }
     if (showAddImport) {
@@ -356,7 +384,7 @@ fun ServersScreen(
                 subscription = sub,
                 onDismiss = { manageSubscriptionId = null },
                 onRename = { viewModel.renameSubscription(sub.id, it) },
-                onEditUrl = { viewModel.updateSubscriptionUrl(sub.id, it) },
+                onEditUrl = { viewModel.updateSubscriptionUrl(sub.id, it, notify) },
                 onToggleEnabled = { viewModel.setSubscriptionEnabled(sub.id, it) },
                 onRefresh = { viewModel.refreshSubscription(sub.id, notify); manageSubscriptionId = null },
                 onDelete = { viewModel.deleteSubscription(sub.id); manageSubscriptionId = null }

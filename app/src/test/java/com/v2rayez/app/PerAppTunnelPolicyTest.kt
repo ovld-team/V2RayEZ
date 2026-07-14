@@ -3,6 +3,7 @@ package com.v2rayez.app
 import com.v2rayez.app.data.vpn.PerAppTunnelPolicy
 import com.v2rayez.app.domain.model.AppProxyConfig
 import com.v2rayez.app.domain.model.AppSettings
+import com.v2rayez.app.domain.model.TorConfig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -60,5 +61,18 @@ class PerAppTunnelPolicyTest {
         val s = AppSettings(appProxy = AppProxyConfig(enabled = false, packages = setOf("x")))
         val d = PerAppTunnelPolicy.decide(s, self)
         assertEquals(PerAppTunnelPolicy.Mode.FULL_DEVICE_EXCEPT_SELF, d.mode)
+    }
+
+    @Test
+    fun torServerPathStillExcludesVpnApp() {
+        val settings = AppSettings(
+            tor = TorConfig(enabled = true, routeAllDevice = false),
+            appProxy = AppProxyConfig(enabled = false)
+        )
+
+        val decision = PerAppTunnelPolicy.decide(settings, self)
+
+        assertEquals(PerAppTunnelPolicy.Mode.FULL_DEVICE_EXCEPT_SELF, decision.mode)
+        assertEquals(setOf(self), decision.packages)
     }
 }

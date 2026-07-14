@@ -24,7 +24,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.v2rayez.app.R
 import com.v2rayez.app.domain.model.ThroughputSample
 import com.v2rayez.app.domain.model.TrafficPoint
 import com.v2rayez.app.domain.model.UsageSlice
@@ -42,8 +46,21 @@ fun TrafficBarChart(
     downloadColor: Color = ChartDownload,
     uploadColor: Color = ChartUpload
 ) {
+    if (points.isEmpty()) {
+        Box(modifier.fillMaxWidth().height(140.dp), contentAlignment = Alignment.Center) {
+            Text(
+                stringResource(R.string.chart_no_traffic),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
     val maxValue = (points.flatMap { listOf(it.download, it.upload) }.maxOrNull() ?: 1f).coerceAtLeast(0.001f)
-    Column(modifier) {
+    val totalDown = points.sumOf { it.download.toDouble() }.toFloat()
+    val totalUp = points.sumOf { it.upload.toDouble() }.toFloat()
+    val chartSummary = stringResource(R.string.chart_summary_traffic, formatMb(totalDown), formatMb(totalUp))
+    Column(modifier.semantics { contentDescription = chartSummary }) {
         Canvas(
             modifier = Modifier
                 .fillMaxWidth()
@@ -110,10 +127,12 @@ fun TrafficAreaChart(
     val maxValue = (points.flatMap { listOf(it.download, it.upload) }.maxOrNull() ?: 0f).coerceAtLeast(0.001f)
     val gridColor = MaterialTheme.colorScheme.outline
     val hasData = points.any { it.download > 0f || it.upload > 0f }
-    Column(modifier) {
+    val peakLabel = stringResource(R.string.chart_peak, formatMb(maxValue))
+    val noTrafficLabel = stringResource(R.string.chart_no_traffic)
+    Column(modifier.semantics { contentDescription = if (hasData) peakLabel else noTrafficLabel }) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
-                if (hasData) "peak ${formatMb(maxValue)}" else "No traffic in this range",
+                if (hasData) peakLabel else noTrafficLabel,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -207,10 +226,13 @@ fun LiveThroughputChart(
         .coerceAtLeast(1L)
     val gridColor = MaterialTheme.colorScheme.outline
     val latest = samples.lastOrNull()
-    Column(modifier) {
+    val downLabel = Formatters.speed(latest?.downBps ?: 0L)
+    val upLabel = Formatters.speed(latest?.upBps ?: 0L)
+    val liveSummary = stringResource(R.string.chart_summary_live, downLabel, upLabel)
+    Column(modifier.semantics { contentDescription = liveSummary }) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            LegendValue(downloadColor, "↓ " + Formatters.speed(latest?.downBps ?: 0L))
-            LegendValue(uploadColor, "↑ " + Formatters.speed(latest?.upBps ?: 0L))
+            LegendValue(downloadColor, "↓ $downLabel")
+            LegendValue(uploadColor, "↑ $upLabel")
         }
         VSpacer(8)
         Canvas(
@@ -271,7 +293,8 @@ fun DonutChart(
     colors: List<Color> = listOf(ChartDownload, ChartUpload, ChartOther)
 ) {
     val total = slices.sumOf { it.value.toDouble() }.toFloat().coerceAtLeast(0.001f)
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+    val donutSummary = slices.joinToString(", ") { "${it.label}: ${it.valueLabel}" }
+    Row(modifier.semantics { contentDescription = donutSummary }, verticalAlignment = Alignment.CenterVertically) {
         Canvas(modifier = Modifier.size(120.dp)) {
             var startAngle = -90f
             val stroke = 24.dp.toPx()

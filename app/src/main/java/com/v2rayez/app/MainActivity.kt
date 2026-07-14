@@ -52,7 +52,17 @@ class MainActivity : ComponentActivity() {
         const val ACTION_SHORTCUT_SERVERS = "com.v2rayez.app.action.SHORTCUT_SERVERS"
         const val ACTION_SHORTCUT_STATS = "com.v2rayez.app.action.SHORTCUT_STATS"
         const val ACTION_SHORTCUT_SNI = "com.v2rayez.app.action.SHORTCUT_SNI"
+
+        /**
+         * `MainActivity` must stay `exported="true"` for the LAUNCHER + app-shortcuts entries,
+         * which means any other app can start us with an explicit [ACTION_SHORTCUT_CONNECT]
+         * intent too (SEC-04) — not just the real app shortcut. Debounce so a malicious app
+         * flood-calling it can't repeatedly flip the tunnel state.
+         */
+        private const val SHORTCUT_CONNECT_DEBOUNCE_MS = 2_000L
     }
+
+    private var lastShortcutConnectAtMs = 0L
 
     private val vpnPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -111,7 +121,15 @@ class MainActivity : ComponentActivity() {
     /** Map an app-shortcut / deep-link action to either a VPN toggle or a target route. */
     private fun handleShortcutIntent(intent: Intent?) {
         when (intent?.action) {
-            ACTION_SHORTCUT_CONNECT -> vpnPermission.request { vpnController.toggle() }
+            ACTION_SHORTCUT_CONNECT -> {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastShortcutConnectAtMs < SHORTCUT_CONNECT_DEBOUNCE_MS) return
+                lastShortcutConnectAtMs = now
+                // Clear the action so a later onCreate replay of the same held Intent (e.g.
+                // recreate() on a locale change) can't silently resubmit the same toggle.
+                intent.action = null
+                vpnPermission.request { vpnController.toggle() }
+            }
             ACTION_SHORTCUT_SERVERS -> initialRoute.value = Routes.SERVERS
             ACTION_SHORTCUT_STATS -> initialRoute.value = Routes.STATISTICS
             ACTION_SHORTCUT_SNI -> initialRoute.value = Routes.SNI_TUNNEL

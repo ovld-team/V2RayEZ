@@ -2,6 +2,7 @@ package com.v2rayez.app.data.core
 
 import android.content.Context
 import android.util.Log
+import com.v2rayez.app.data.analytics.PiiScrubber
 import com.v2rayez.app.data.analytics.RemoteTelemetry
 import com.v2rayez.app.data.download.DownloadOutcome
 import com.v2rayez.app.data.download.DownloadTransport
@@ -131,7 +132,10 @@ class GeoAssetManager @Inject constructor(
         val bytes = when (outcome) {
             is DownloadOutcome.Success -> outcome.bytes
             is DownloadOutcome.Failed -> {
-                Log.w(TAG, "$name download failed: ${outcome.error.message}")
+                // error.message embeds the download URL; scrub before WARNING+ Logcat forwards
+                // it to Sentry Logs (14-P0-2). The unscrubbed reason still flows into
+                // captureDownloadFailure() above, which scrubs it again at the Sentry boundary.
+                Log.w(TAG, "$name download failed: ${PiiScrubber.scrub(outcome.error.message ?: "")}")
                 staged.delete()
                 return FetchResult.Error(outcome.error.message ?: "download failed")
             }

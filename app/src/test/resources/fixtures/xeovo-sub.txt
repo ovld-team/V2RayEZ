@@ -1,0 +1,11 @@
+hysteria2://token@1.2.3.4:443/?sni=h1.example#Hy2-A
+hysteria2://token@1.2.3.5:443/?sni=h2.example#Hy2-B
+vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@node1.example.com:443/potosi?type=ws&encryption=none&security=tls&sni=node1.example.com&host=node1.example.com&path=%2Fpotosi#VLESS-WS-1
+vless://bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee@node2.example.com:443?security=tls&type=tcp#VLESS-TCP-2
+vless://cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee@node3.example.com:8443/ws-path?type=ws&encryption=none&security=tls&path=%2Fws-path#VLESS-WS-3
+vmess://eyJ2IjoiMiIsInBzIjoiVk0tMSIsImFkZCI6InZtMS5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6ImFhYWFhYWEtYmJiYi1jY2NjLWRkZGQtZWVlZWVlZWVlZWUiLCJhaWQiOiIwIiwic2N5IjoiYXV0byIsIm5ldCI6IndzIiwidHlwZSI6Im5vbmUiLCJob3N0Ijoidm0xLmV4YW1wbGUuY29tIiwicGF0aCI6Ii92bSIsInRscyI6InRscyIsInNuaSI6InZtMS5leGFtcGxlLmNvbSJ9
+vmess://eyJ2IjoiMiIsInBzIjoiVk0tMiIsImFkZCI6InZtMi5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6ImJiYmJiYmJiLWJiYmItY2NjYy1kZGRkLWVlZWVlZWVlZWVlIiwiYWlkIjoiMCIsInNjeSI6ImF1dG8iLCJuZXQiOiJ0Y3AiLCJ0eXBlIjoibm9uZSIsInRscyI6InRscyIsInNuaSI6InZtMi5leGFtcGxlLmNvbSJ9
+trojan://password123@tr1.example.com:443?security=tls&sni=tr1.example.com#Trojan-1
+trojan://password456@tr2.example.com:443?security=tls#Trojan-2
+ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpwYXNz@ss1.example.com:8388#SS-1
+ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpwbGFpbg==@ss2.example.com:443#SS-2

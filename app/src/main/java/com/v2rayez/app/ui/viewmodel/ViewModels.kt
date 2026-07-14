@@ -311,6 +311,10 @@ class ServersViewModel @Inject constructor(
     private val _lastPingMessage = MutableStateFlow<String?>(null)
     val lastPingMessage: StateFlow<String?> = _lastPingMessage
 
+    /** Surfaces pull-to-refresh / auto-refresh failures the old silent `runCatching` swallowed. */
+    private val _refreshError = MutableStateFlow<String?>(null)
+    val refreshError: StateFlow<String?> = _refreshError
+
     private var pingJob: kotlinx.coroutines.Job? = null
 
     val subscriptions: StateFlow<List<Subscription>> =
@@ -365,13 +369,27 @@ class ServersViewModel @Inject constructor(
         settings.update { it.copy(defaultServerId = serverId) }
     }
 
-    /** Pull-to-refresh: re-fetch every enabled subscription. */
+    /** Pull-to-refresh: re-fetch every enabled subscription; surfaces a summary on failure. */
     fun refresh() {
         viewModelScope.launch {
             _refreshing.update { true }
-            subscriptions.value.filter { it.enabled }.forEach { runCatching { repo.refreshSubscription(it.id) } }
+            val targets = subscriptions.value.filter { it.enabled }
+            var failed = 0
+            targets.forEach { sub ->
+                val ok = runCatching { repo.refreshSubscription(sub.id) }.getOrNull()?.success == true
+                if (!ok) failed++
+            }
             _refreshing.update { false }
+            _refreshError.value = when {
+                targets.isEmpty() || failed == 0 -> null
+                failed == targets.size -> "Refresh failed for all subscriptions"
+                else -> "Refresh failed for $failed of ${targets.size} subscription(s)"
+            }
         }
+    }
+
+    fun clearRefreshError() {
+        _refreshError.value = null
     }
 
     fun toggleFavorite(id: String) = viewModelScope.launch { repo.toggleFavorite(id) }
@@ -530,8 +548,23 @@ class ServersViewModel @Inject constructor(
     fun renameSubscription(id: String, name: String) =
         viewModelScope.launch { repo.renameSubscription(id, name) }
 
-    fun updateSubscriptionUrl(id: String, url: String) =
-        viewModelScope.launch { repo.updateSubscriptionUrl(id, url) }
+    /** Update a subscription's URL, then immediately re-fetch it (old nodes were previously stale until the next manual/auto refresh). */
+    fun updateSubscriptionUrl(id: String, url: String, onResult: (String) -> Unit = {}) {
+        if (url.isBlank()) return
+        viewModelScope.launch {
+            repo.updateSubscriptionUrl(id, url)
+            _refreshingSubs.update { it + id }
+            val r = runCatching { repo.refreshSubscription(id) }.getOrNull()
+            _refreshingSubs.update { it - id }
+            onResult(
+                when {
+                    r == null -> "URL updated, but refresh failed"
+                    r.success -> "URL updated — ${r.importedCount} server(s)"
+                    else -> "URL updated, but refresh failed: ${r.message.ifBlank { "unknown error" }}"
+                }
+            )
+        }
+    }
 
     fun setSubscriptionEnabled(id: String, enabled: Boolean) =
         viewModelScope.launch { repo.setSubscriptionEnabled(id, enabled) }
@@ -673,7 +706,11 @@ class FreeServersViewModel @Inject constructor(
     fun toggleSortByPing() = sortByPing.update { !it }
     fun toggleWorkingOnly() = workingOnly.update { !it }
 
-    /** Accurate single-row test (Xray handshake) before adding it. */
+    /**
+     * Test a free-list row with the same bounded TCP probe used by bulk scans.
+     * A throwaway Xray handshake can block for ten seconds per tap and is serialized with
+     * core startup, which made this ping affordance appear to do nothing.
+     */
     fun test(server: Server) {
         singleTestJobs.remove(server.id)?.cancel()
         val job = viewModelScope.launch {
@@ -681,7 +718,7 @@ class FreeServersViewModel @Inject constructor(
             testing.update { it + server.id }
             try {
                 val ping = try {
-                    vpn.testLatency(server).pingMs
+                    vpn.testLatencyQuick(server).pingMs
                 } catch (ce: kotlinx.coroutines.CancellationException) {
                     throw ce
                 } catch (_: Exception) {
@@ -889,6 +926,23 @@ class ServerEditorViewModel @Inject constructor(
         allowInsecure: Boolean = false,
         publicKey: String = "",
         shortId: String = "",
+        ssPlugin: String = "",
+        ssPluginOptions: String = "",
+        sshUser: String = "",
+        sshPrivateKey: String = "",
+        sshHostKey: String = "",
+        wgPrivateKey: String = "",
+        wgPeerPublicKey: String = "",
+        wgPreSharedKey: String = "",
+        wgLocalAddresses: List<String> = emptyList(),
+        wgAllowedIps: List<String> = emptyList(),
+        wgReserved: List<Int> = emptyList(),
+        wgMtu: Int = 0,
+        dnsTunnelDomain: String = "",
+        dnsTunnelPubKey: String = "",
+        dnsTunnelResolver: String = "",
+        dnsTunnelMode: String = "doh",
+        psiphonConfig: String = "",
         frontProxyId: String? = null,
         customGroup: String? = null,
         preferredCore: com.v2rayez.app.domain.model.CorePreference =
@@ -896,7 +950,8 @@ class ServerEditorViewModel @Inject constructor(
     ) {
         viewModelScope.launch {
             val (code, country) = CountryGuesser.guess(name.ifBlank { host })
-            val usesPassword = protocol == Protocol.TROJAN || protocol == Protocol.SHADOWSOCKS
+            val usesPassword = protocol == Protocol.TROJAN ||
+                protocol == Protocol.SHADOWSOCKS || protocol == Protocol.SSH
             val net = network.ifBlank { "tcp" }.lowercase()
             val security = streamSecurity.lowercase()
             // Editing a subscription-owned server keeps it attached and flags it so a future
@@ -929,6 +984,8 @@ class ServerEditorViewModel @Inject constructor(
                 uuid = if (usesPassword) base.uuid else secret,
                 password = if (usesPassword) secret else base.password,
                 method = method.ifBlank { base.method },
+                ssPlugin = ssPlugin,
+                ssPluginOptions = ssPluginOptions,
                 alterId = alterId,
                 flow = flow,
                 network = net,
@@ -941,6 +998,21 @@ class ServerEditorViewModel @Inject constructor(
                 allowInsecure = allowInsecure,
                 publicKey = publicKey,
                 shortId = shortId,
+                sshUser = sshUser,
+                sshPrivateKey = sshPrivateKey,
+                sshHostKey = sshHostKey,
+                wgPrivateKey = wgPrivateKey,
+                wgPeerPublicKey = wgPeerPublicKey,
+                wgPreSharedKey = wgPreSharedKey,
+                wgLocalAddresses = wgLocalAddresses,
+                wgAllowedIps = wgAllowedIps.ifEmpty { listOf("0.0.0.0/0", "::/0") },
+                wgReserved = wgReserved,
+                wgMtu = wgMtu,
+                dnsTunnelDomain = dnsTunnelDomain,
+                dnsTunnelPubKey = dnsTunnelPubKey,
+                dnsTunnelResolver = dnsTunnelResolver,
+                dnsTunnelMode = dnsTunnelMode,
+                psiphonConfig = psiphonConfig,
                 frontProxyId = frontProxyId,
                 customGroup = customGroup,
                 preferredCore = preferredCore,
@@ -1023,22 +1095,41 @@ class BackupViewModel @Inject constructor(
     val message: StateFlow<String?> = _message
     fun clearMessage() = _message.update { null }
 
-    /** Serialize settings + all server share URIs into a portable JSON string. */
+    /** Serialize settings, subscription metadata, and server share URIs into portable JSON. */
     suspend fun exportJson(): String {
         val settings = settingsRepo.current()
-        val uris = serverRepo.servers().first().mapNotNull { runCatching { serverRepo.exportUri(it) }.getOrNull() }
+        val snapshot = serverRepo.backupSnapshot()
+        val allServers = snapshot.servers
+        val manualUris = allServers
+            .filter { it.subscriptionId == null }
+            .mapNotNull { runCatching { serverRepo.exportUri(it) }.getOrNull() }
             .filter { it.isNotBlank() }
+        val subscriptionServers = allServers
+            .filter { it.subscriptionId != null }
+            .groupBy { requireNotNull(it.subscriptionId) }
+            .mapValues { (_, servers) ->
+                servers.mapNotNull { runCatching { serverRepo.exportUri(it) }.getOrNull() }
+                    .filter { it.isNotBlank() }
+            }
         return json.encodeToString(com.v2rayez.app.domain.model.BackupData.serializer(),
-            com.v2rayez.app.domain.model.BackupData(settings = settings, servers = uris))
+            com.v2rayez.app.domain.model.BackupData(
+                settings = settings,
+                servers = manualUris,
+                subscriptions = snapshot.subscriptions,
+                subscriptionServers = subscriptionServers
+            ))
     }
 
-    /** Restore settings and import servers from a previously exported JSON string. */
+    /** Restore settings, subscription metadata, and servers from a portable backup. */
     suspend fun importJson(text: String): Boolean = runCatching {
         val backup = json.decodeFromString(com.v2rayez.app.domain.model.BackupData.serializer(), text)
+        val restoreResult = serverRepo.restoreBackup(
+            subscriptions = backup.subscriptions,
+            manualUris = backup.servers,
+            subscriptionServers = backup.subscriptionServers
+        )
+        check(restoreResult.success) { restoreResult.message }
         settingsRepo.update { SupportedLanguages.normalizeSettings(backup.settings) }
-        if (backup.servers.isNotEmpty()) {
-            serverRepo.importFromText(backup.servers.joinToString("\n"))
-        }
         _message.update { "Backup restored" }
         true
     }.getOrElse {
@@ -1230,6 +1321,12 @@ class SettingsViewModel @Inject constructor(
     fun toggleAppPackage(pkg: String) = edit {
         val set = it.appProxy.packages
         it.copy(appProxy = it.appProxy.copy(packages = if (pkg in set) set - pkg else set + pkg))
+    }
+
+    /** Per-app rules are applied only when VpnService rebuilds the TUN — reconnect to apply. */
+    fun reconnectVpn() {
+        val server = vpn.connectionState.value.server ?: return
+        vpn.connect(server)
     }
 
     // --- Fragment (SNI Tunnel) ---

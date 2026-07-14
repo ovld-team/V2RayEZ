@@ -37,6 +37,7 @@ import com.v2rayez.app.data.fronting.DomainFrontTuning
 import com.v2rayez.app.ui.components.CardSurface
 import com.v2rayez.app.ui.components.HSpacer
 import com.v2rayez.app.ui.components.PrimaryButton
+import com.v2rayez.app.ui.components.ReconnectBanner
 import com.v2rayez.app.ui.components.SectionHeader
 import com.v2rayez.app.ui.components.SettingSwitchRow
 import com.v2rayez.app.ui.components.V2BackTopBar
@@ -75,31 +76,11 @@ fun DomainFrontingScreen(
             VSpacer(12)
 
             if (connected) {
-                CardSurface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Filled.Refresh,
-                            contentDescription = null,
-                            tint = Warning,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        HSpacer(10)
-                        Text(
-                            stringResource(R.string.fronting_reconnect_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(onClick = viewModel::reconnect) {
-                            Text(stringResource(R.string.fronting_reconnect_now))
-                        }
-                    }
-                }
+                ReconnectBanner(
+                    hint = stringResource(R.string.fronting_reconnect_hint),
+                    actionLabel = stringResource(R.string.fronting_reconnect_now),
+                    onReconnect = viewModel::reconnect
+                )
                 VSpacer(12)
             }
 
@@ -226,9 +207,6 @@ private fun FrontField(
 @Composable
 private fun DomainFrontingScreenPreview() {
     V2RayEzTheme {
-        // Preview uses Hilt-backed VM in real runs; scaffold-only layout check here.
-        Column(Modifier.padding(16.dp)) {
-            Text(stringResource(R.string.sni_front_title), style = MaterialTheme.typography.titleLarge)
-        }
+        DomainFrontingScreen(onBack = {}, viewModel = DomainFrontingViewModel())
     }
 }

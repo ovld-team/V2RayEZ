@@ -78,7 +78,14 @@ class RealVpnController @Inject constructor(
                 testLatencyInner(server)
             }
         } catch (_: TimeoutCancellationException) {
-            TestResult(server.id, -1, false, "Timed out")
+            // Libv2ray's outbound-delay probe can consume the whole timeout even when the
+            // endpoint itself is reachable. Do not discard that reachability signal: this
+            // was making Free Servers row tests show every timed-out handshake as dead.
+            tcpResult(
+                serverId = server.id,
+                tcpMs = tcpConnectMs(server.host, server.port, QUICK_TCP_TIMEOUT_MS),
+                failureMessage = "Timed out"
+            )
         }
         // Dead/slow public servers time out constantly — sampled at ~10% with a
         // false_positive_candidate tag (see RemoteTelemetry) instead of alerting on every one.
@@ -144,11 +151,7 @@ class RealVpnController @Inject constructor(
      */
     override suspend fun testLatencyQuick(server: Server): TestResult = withContext(Dispatchers.IO) {
         val tcp = tcpConnectMs(server.host, server.port, timeoutMs = QUICK_TCP_TIMEOUT_MS)
-        if (tcp > 0) {
-            TestResult(server.id, tcp.toInt(), true)
-        } else {
-            TestResult(server.id, -1, false, "TCP connect failed")
-        }
+        tcpResult(server.id, tcp, "TCP connect failed")
     }
 
     private fun tcpConnectMs(host: String, port: Int, timeoutMs: Int = 5_000): Long {
@@ -166,5 +169,12 @@ class RealVpnController @Inject constructor(
         private const val QUICK_TCP_TIMEOUT_MS = 1_500
         /** Hard ceiling for accurate (Xray + TCP) free/server probes — stalls must surface as Timed out. */
         private const val ACCURATE_TIMEOUT_MS = 10_000L
+
+        internal fun tcpResult(serverId: String, tcpMs: Long, failureMessage: String): TestResult =
+            if (tcpMs > 0) {
+                TestResult(serverId, tcpMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), true)
+            } else {
+                TestResult(serverId, -1, false, failureMessage)
+            }
     }
 }

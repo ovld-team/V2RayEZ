@@ -41,6 +41,7 @@ enum class CorePreference(val label: String) {
 const val CORE_VERSION_BUNDLED = "bundled"
 
 /** A remote subscription that yields a list of servers. */
+@Serializable
 data class Subscription(
     val id: String,
     val name: String,
@@ -356,6 +357,11 @@ data class TorConfig(
     val socksHost: String = "127.0.0.1",
     val socksPort: Int = 9050,
     /**
+     * Local Tor DNSPort (UDP). Used by full-device Tor sessions so app DNS does not rely on
+     * UDP-over-SOCKS (unsupported). Default pairs with [socksPort] on loopback.
+     */
+    val dnsPort: Int = 9053,
+    /**
      * When true with [enabled], start a Tor-only VpnService session that routes all apps
      * through the Tor SOCKS outbound (Xray catch-all). Requires VPN permission.
      */
@@ -583,10 +589,20 @@ data class AppSettings(
      */
     val autoConnect: Boolean = false,
     /**
-     * When true, [com.v2rayez.app.data.service.BootReceiver] reconnects [lastServerId] after boot.
-     * Existing installs that only had [autoConnect] still boot-connect via receiver fallback.
+     * When true, [com.v2rayez.app.data.service.BootReceiver] reconnects [lastServerId] after
+     * boot (subject to [android.net.VpnService.prepare] consent already having been granted).
+     * Deliberately independent of [autoConnect] — that flag never promised a boot reconnect.
      */
     val bootAutoConnect: Boolean = false,
+    /**
+     * One-shot guard, flipped by [com.v2rayez.app.data.service.BootReceiver] on its first run
+     * after this flag existed. Installs from before [bootAutoConnect] shipped relied on the
+     * (now removed) `bootAutoConnect || autoConnect` fallback for boot reconnect; on the first
+     * boot post-upgrade this migrates that implicit behavior into an explicit [bootAutoConnect]
+     * `= true` exactly once, so those users don't silently lose boot-reconnect. Never touched
+     * again afterwards — later toggles of either setting are fully independent from then on.
+     */
+    val legacyAutoConnectBootMigrated: Boolean = false,
     /** Strategy for downloading on-demand core/addon packs. */
     val downloadMode: DownloadMode = DownloadMode.AUTO,
     /** Pack ids queued for install after onboarding or Components UI (e.g. `tor`, `sing-box`). */
@@ -644,12 +660,50 @@ data class AppSettings(
     val defaultServerId: String? = null
 )
 
-/** Portable backup payload: full settings + server share URIs. */
+/**
+ * Runtime-only DNS hardening for every Tor exit, including Tor used with a selected server.
+ *
+ * Tor SOCKS cannot carry ordinary UDP DNS. Intercept port 53 in Xray, enable FakeDNS for
+ * domain/sniffing fidelity, and send Xray's resolver queries to the embedded Tor DNSPort.
+ */
+fun AppSettings.torEffectiveSettings(): AppSettings {
+    if (!tor.enabled) return this
+    val effectiveDnsPort = tor.dnsPort.takeIf { it in 1..65535 } ?: 9053
+    return copy(
+        enableLocalDns = true,
+        enableSniffing = true,
+        dns = dns.copy(
+            remoteDns = "127.0.0.1:$effectiveDnsPort",
+            enableFakeDns = true
+        ),
+        tor = tor.copy(dnsPort = effectiveDnsPort)
+    )
+}
+
+/** Portable, intentionally unencrypted backup payload. UI must warn before export or restore. */
 @Serializable
 data class BackupData(
-    val version: Int = 1,
+    val version: Int = 2,
     val settings: AppSettings,
-    val servers: List<String> = emptyList()
+    /** Legacy v1 list and v2 manual/unowned servers. */
+    val servers: List<String> = emptyList(),
+    val subscriptions: List<Subscription> = emptyList(),
+    /** Subscription id to share URIs, preserving ownership across a portable restore. */
+    val subscriptionServers: Map<String, List<String>> = emptyMap()
+) {
+    /** True when the payload contains credentials or private subscription endpoints. */
+    fun containsSensitiveCredentials(): Boolean =
+        servers.isNotEmpty() ||
+            subscriptionServers.values.any { it.isNotEmpty() } ||
+            subscriptions.any { it.url.isNotBlank() } ||
+            settings.warp.privateKey.isNotBlank() ||
+            settings.tor.bridges.any { it.isNotBlank() }
+}
+
+/** Consistent Room snapshot used to build a portable backup. */
+data class BackupSnapshot(
+    val servers: List<Server>,
+    val subscriptions: List<Subscription>
 )
 
 /** Result of a latency / connectivity test. */

@@ -5,11 +5,38 @@ import com.v2rayez.app.data.parser.ProxyParser
 import com.v2rayez.app.domain.model.AppSettings
 import com.v2rayez.app.domain.model.RoutingConfig
 import com.v2rayez.app.domain.model.RoutingMode
+import com.v2rayez.app.domain.model.TorConfig
+import com.v2rayez.app.domain.model.torEffectiveSettings
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ConfigBuilderTest {
+    @Test
+    fun rejectsMissingOrMalformedRealityPublicKey() {
+        val base = com.v2rayez.app.data.parser.ProxyParser.parse(
+            "vless://id@reality.example:443?security=reality&type=tcp&sni=www.example.com#Reality"
+        )!!
+        org.junit.Assert.assertTrue(ConfigBuilder.validate(base)!!.contains("missing"))
+        org.junit.Assert.assertTrue(
+            ConfigBuilder.validate(base.copy(publicKey = "not-a-key"))!!.contains("invalid")
+        )
+        org.junit.Assert.assertNull(
+            ConfigBuilder.validate(base.copy(publicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+        )
+    }
+
+    @Test
+    fun rejectsQuicAndKcpWithoutSilentTcpFallback() {
+        val base = com.v2rayez.app.data.parser.ProxyParser.parse(
+            "vless://id@transport.example:443?security=none&type=quic#QUIC"
+        )!!
+        org.junit.Assert.assertTrue(ConfigBuilder.validate(base)!!.contains("not supported"))
+        org.junit.Assert.assertTrue(
+            ConfigBuilder.validate(base.copy(network = "kcp"))!!.contains("not supported")
+        )
+    }
 
     private fun vless() = ProxyParser.parse(
         "vless://id-9@srv.example.com:443?encryption=none&security=tls&type=ws&path=%2Fp&sni=srv.example.com#Node"
@@ -154,6 +181,42 @@ class ConfigBuilderTest {
         val settings = AppSettings(tor = com.v2rayez.app.domain.model.TorConfig(enabled = true))
         val json = ConfigBuilder.build(vless(), settings)
         assertTrue(json.contains("\"tag\":\"tor\""))
+    }
+
+    @Test
+    fun nonRouteAllTorForcesLocalFakeDnsAndDnsPort() {
+        val raw = AppSettings(
+            enableLocalDns = false,
+            enableSniffing = false,
+            tor = TorConfig(enabled = true, dnsPort = 9153, routeAllDevice = false)
+        )
+
+        val effective = raw.torEffectiveSettings()
+        assertTrue(effective.enableLocalDns)
+        assertTrue(effective.enableSniffing)
+        assertTrue(effective.dns.enableFakeDns)
+        assertEquals("127.0.0.1:9153", effective.dns.remoteDns)
+        assertFalse(effective.tor.routeAllDevice)
+        assertFalse(effective.fullDeviceTunnel)
+
+        // ConfigBuilder also applies the runtime settings so non-service callers cannot regress.
+        val json = ConfigBuilder.build(vless(), raw)
+        assertTrue(json.contains("\"servers\":[\"fakedns\",\"127.0.0.1:9153\""))
+        assertTrue(json.contains("\"outboundTag\":\"dns-out\",\"port\":\"53\""))
+        assertTrue(json.indexOf("\"outboundTag\":\"dns-out\"") < json.indexOf("\"outboundTag\":\"tor\""))
+    }
+
+    @Test
+    fun torEffectiveSettingsFallsBackToDefaultDnsPort() {
+        val effective = AppSettings(
+            enableLocalDns = false,
+            tor = TorConfig(enabled = true, dnsPort = 0)
+        ).torEffectiveSettings()
+
+        assertEquals(9053, effective.tor.dnsPort)
+        assertEquals("127.0.0.1:9053", effective.dns.remoteDns)
+        assertTrue(effective.enableLocalDns)
+        assertTrue(effective.dns.enableFakeDns)
     }
 
     @Test
@@ -409,5 +472,27 @@ class ConfigBuilderTest {
         val json = ConfigBuilder.build(vless(), AppSettings(enableLocalDns = false))
         assertTrue(json.contains("\"outboundTag\":\"direct\""))
         assertTrue(json.contains("\"port\":\"53\""))
+    }
+
+    @Test
+    fun torStandalonePlacesDnsAndLoopbackBeforeCatchAll() {
+        val settings = AppSettings(
+            tor = com.v2rayez.app.domain.model.TorConfig(enabled = true),
+            enableLocalDns = true
+        )
+        val json = ConfigBuilder.build(vless(), settings)
+        val dnsIdx = json.indexOf("\"outboundTag\":\"dns-out\"")
+        val port53Idx = json.indexOf("\"port\":\"53\"")
+        val loopbackIdx = json.indexOf(
+            "\"type\":\"field\",\"outboundTag\":\"direct\",\"ip\":[\"127.0.0.1\",\"::1\"]"
+        )
+        val torCatchIdx = json.indexOf("\"outboundTag\":\"tor\"")
+        assertTrue("dns-out rule missing", dnsIdx >= 0)
+        assertTrue("port 53 rule missing", port53Idx >= 0)
+        assertTrue("loopback direct missing", loopbackIdx >= 0)
+        assertTrue("tor catch-all missing", torCatchIdx >= 0)
+        assertTrue("port 53 must precede Tor catch-all", port53Idx < torCatchIdx)
+        assertTrue("loopback direct must precede Tor catch-all", loopbackIdx < torCatchIdx)
+        assertTrue(json.contains("\"tag\":\"dns-out\""))
     }
 }

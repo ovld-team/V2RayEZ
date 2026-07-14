@@ -28,11 +28,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 /**
@@ -115,8 +117,8 @@ class MitmDomainFrontingViewModel @Inject constructor(
 
     fun toggleEnabled(enabled: Boolean) {
         if (enabled && !isCaReady()) {
-            _message.value =
-                "Generate the certificate, install it, then confirm it's installed before enabling."
+            _message.value = context?.getString(R.string.mitm_ca_enable_requires_install)
+                ?: "Generate the certificate, install it, then confirm it's installed before enabling."
             return
         }
         edit { it.copy(enabled = enabled) }
@@ -133,8 +135,8 @@ class MitmDomainFrontingViewModel @Inject constructor(
                 return@launch
             }
             if (capture && !isCaReady()) {
-                _message.value =
-                    "Generate the certificate, install it, then confirm it's installed before tunneling the device."
+                _message.value = context?.getString(R.string.mitm_ca_capture_requires_install)
+                    ?: "Generate the certificate, install it, then confirm it's installed before tunneling the device."
                 return@launch
             }
             // Switching mode: stop standalone proxy when enabling whole-device.
@@ -158,6 +160,11 @@ class MitmDomainFrontingViewModel @Inject constructor(
                         // Restart so startTunnel takes the MITM capture branch.
                         if (!isMitmVpnSession()) {
                             vpn.disconnect()
+                            // Never toggle while still CONNECTED — wait for a clean disconnect
+                            // first (mirrors TorViewModel.setRouteAllDevice).
+                            withTimeoutOrNull(15_000) {
+                                vpn.connectionState.first { it.status == ConnectionStatus.DISCONNECTED }
+                            }
                             vpn.toggle()
                         }
                     }
@@ -196,7 +203,7 @@ class MitmDomainFrontingViewModel @Inject constructor(
                 result.onSuccess {
                     refreshCaState()
                     acknowledgeCaInstall(false)
-                    _message.value = "Certificate generated"
+                    _message.value = ctx.getString(R.string.mitm_ca_generated)
                 }.onFailure { e ->
                     val detail = generateSequence(e) { it.cause }
                         .mapNotNull { it.message }
@@ -225,9 +232,9 @@ class MitmDomainFrontingViewModel @Inject constructor(
             val hint = runCatching { MitmCaInstallHelper.exportCrtToDownloads(ctx) }.getOrNull()
             withContext(Dispatchers.Main) {
                 _message.value = if (hint != null) {
-                    "Saved to Downloads as ${MitmCaInstallHelper.DOWNLOADS_CRT_NAME}"
+                    ctx.getString(R.string.mitm_ca_saved_downloads, MitmCaInstallHelper.DOWNLOADS_CRT_NAME)
                 } else {
-                    "Could not save to Downloads — use Share certificate instead"
+                    ctx.getString(R.string.mitm_ca_save_failed)
                 }
             }
         }
@@ -249,7 +256,7 @@ class MitmDomainFrontingViewModel @Inject constructor(
     fun importPair(crtText: String, keyText: String) {
         val ctx = context ?: run { _message.value = "Not available in preview"; return }
         if (crtText.isBlank() || keyText.isBlank()) {
-            _message.value = "Paste both the certificate and the private key"
+            _message.value = ctx.getString(R.string.mitm_import_paste_both)
             return
         }
         viewModelScope.launch(Dispatchers.IO) {
@@ -259,7 +266,7 @@ class MitmDomainFrontingViewModel @Inject constructor(
                     is MitmCaImportResult.Success -> {
                         refreshCaState()
                         acknowledgeCaInstall(false)
-                        _message.value = "Certificate imported"
+                        _message.value = ctx.getString(R.string.mitm_ca_imported)
                     }
                     is MitmCaImportResult.Failure -> _message.value = result.reason
                 }

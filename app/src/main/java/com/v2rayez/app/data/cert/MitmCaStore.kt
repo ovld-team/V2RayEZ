@@ -81,7 +81,12 @@ object MitmCaStore {
     fun exportCrtShareUri(context: Context): Uri? {
         val crt = crtFile(context)
         if (!crt.exists()) return null
-        return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", crt)
+        return runCatching {
+            val stagingDir = File(context.cacheDir, "mitm-certs").apply { mkdirs() }
+            val stagedCrt = File(stagingDir, CRT_NAME)
+            crt.copyTo(stagedCrt, overwrite = true)
+            FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", stagedCrt)
+        }.getOrNull()
     }
 
     /** Zips cert + key into the cache dir for a "PC import pack" download; returns the zip file. */

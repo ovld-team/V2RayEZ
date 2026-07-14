@@ -134,6 +134,11 @@ fun BpbPanelScreen(onBack: () -> Unit, viewModel: ToolsViewModel = hiltViewModel
                     factory = { ctx ->
                         WebView(ctx).apply {
                             webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(
+                                    view: WebView?,
+                                    request: android.webkit.WebResourceRequest?
+                                ): Boolean = !isAllowedPanelScheme(request?.url?.scheme)
+
                                 override fun onReceivedError(
                                     view: WebView?,
                                     request: android.webkit.WebResourceRequest?,
@@ -159,3 +164,11 @@ fun BpbPanelScreen(onBack: () -> Unit, viewModel: ToolsViewModel = hiltViewModel
 
 private fun formatTime(epoch: Long): String =
     SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(epoch))
+
+/**
+ * BPB panel navigation allowlist: only `http`/`https` are safe destinations for a dashboard
+ * WebView (SEC-05). Blocks `file://`, `content://`, `intent://`, `javascript:`, and other
+ * schemes a hostile or compromised panel URL could pivot into once loaded.
+ */
+internal fun isAllowedPanelScheme(scheme: String?): Boolean =
+    scheme.equals("http", ignoreCase = true) || scheme.equals("https", ignoreCase = true)

@@ -8,4 +8,5 @@ plugins {
     // Firebase light (Crashlytics + Analytics only) — applied in app/build.gradle.kts
     alias(libs.plugins.google.services) apply false
     alias(libs.plugins.firebase.crashlytics.plugin) apply false
+    alias(libs.plugins.sentry.android.gradle) apply false
 }

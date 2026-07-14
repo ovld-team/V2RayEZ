@@ -23,21 +23,16 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
-import java.io.File
 import java.net.InetSocketAddress
 import java.net.Socket
-import java.net.URL
 
 /**
- * Live Xeovo subscription matrix. Prefers /tmp/xeovo-sub.txt if present, else fetches.
+ * Xeovo subscription matrix. Offline by default via [XeovoTestSupport] fixture; live fetch/TCP
+ * checks require [XeovoTestSupport.LIVE_NETWORK_ENV]=1.
  */
 class XeovoSubscriptionMatrixTest {
 
-    private fun loadSub(): String {
-        val local = File("/tmp/xeovo-sub.txt")
-        if (local.isFile && local.length() > 100) return local.readText()
-        return URL(SUB_URL).openStream().bufferedReader().readText()
-    }
+    private fun loadSub(): String = XeovoTestSupport.loadSub()
 
     private fun servers(): List<Server> =
         ProxyParser.parseMany(loadSub(), ServerGroup.SUBSCRIPTION, "xeovo-test")
@@ -189,6 +184,10 @@ class XeovoSubscriptionMatrixTest {
 
     @Test
     fun liveTcpReachabilitySample() {
+        assumeTrue(
+            "live TCP checks require ${XeovoTestSupport.LIVE_NETWORK_ENV}=1",
+            XeovoTestSupport.isLiveNetworkEnabled()
+        )
         val samples = pickSamples(servers(), perProto = 2)
         assumeTrue(samples.isNotEmpty())
         var ok = 0
@@ -216,11 +215,5 @@ class XeovoSubscriptionMatrixTest {
                 (System.currentTimeMillis() - t0).coerceAtLeast(1)
             }
         }.getOrDefault(-1)
-    }
-
-    companion object {
-        // User-provided test subscription (sideload QA only).
-        const val SUB_URL =
-            "https://xeovo.com/proxy/pw/LUSyhcYjwPoC1FvhQd95hrUacf6RtJX7/plain/config"
     }
 }

@@ -29,6 +29,15 @@
     <string name="action_filter">Filter</string>
     <string name="action_back">Back</string>
     <string name="action_add">Add</string>
+    <string name="action_more">More</string>
+    <string name="action_copy_address">Copy address</string>
+    <string name="action_close_scanner">Close scanner</string>
+    <string name="action_switch_camera">Switch camera</string>
+    <string name="action_flashlight_on">Turn on flashlight</string>
+    <string name="action_flashlight_off">Turn off flashlight</string>
+    <string name="action_qr_code">QR code</string>
+    <string name="qr_scan_prompt">Align the QR code within the frame</string>
+    <string name="qr_camera_permission_required">Camera permission is required to scan QR codes.</string>
 
     <!-- Servers -->
     <string name="servers_title">Servers</string>
@@ -116,6 +125,7 @@
     <string name="home_select_server">Select a server to connect</string>
     <string name="home_premium">Premium</string>
     <string name="home_assets">Assets</string>
+    <string name="home_open_core_manager">Open Core manager</string>
     <string name="home_notifications">Notifications</string>
     <string name="home_toggle_connection">Toggle connection</string>
     <string name="home_traffic">Traffic</string>
@@ -343,7 +353,9 @@
     <string name="core_version_bundled">Bundled</string>
     <string name="core_fetch_releases">Fetch releases</string>
     <string name="core_update_latest">Update latest</string>
-    <string name="core_bundled_missing">Bundled binary not runnable on %1$s — download a release for this ABI</string>
+    <string name="core_bundled_missing">Not bundled in this APK for %1$s — download a release in Core manager</string>
+    <string name="core_download_only_hint">sing-box and mihomo ship download-only (not packaged in the APK) to keep the install small.</string>
+    <string name="appproxy_reconnect_hint">Per-app proxy changes apply after reconnecting the VPN</string>
     <string name="core_download">Download</string>
     <string name="core_delete">Delete</string>
     <string name="core_busy">Working…</string>
@@ -365,6 +377,32 @@
     <string name="core_addon_queued">Queued — will install when a release source is available</string>
     <string name="core_addon_cancel">Cancel</string>
     <string name="core_addon_delete">Delete</string>
+    <string name="core_hint_check_connection">Check your connection and try again.</string>
+    <string name="core_hint_connect_first">If your network blocks GitHub, connect to a server first — downloads route through the tunnel.</string>
+    <string name="core_status_downloading">Downloading %1$s %2$s (%3$s)…</string>
+    <string name="core_status_installed">Installed %1$s for %2$s</string>
+    <string name="core_status_download_failed">Download failed (need %1$s build). %2$s</string>
+    <string name="core_status_fetching">Fetching %1$s releases for %2$s…</string>
+    <string name="core_status_no_releases">No %1$s releases found for %2$s</string>
+    <string name="core_status_found_releases">Found %1$d %2$s release(s)</string>
+    <string name="core_status_xray_optional">Xray uses the bundled AAR — download is optional/unused for VPN</string>
+    <string name="core_status_updating">Updating %1$s latest for %2$s…</string>
+    <string name="core_status_updated">Updated to %1$s (%2$s)</string>
+    <string name="core_status_update_failed">Update failed — no runnable %1$s build. %2$s</string>
+    <string name="core_status_deleted_version">Deleted %1$s</string>
+    <string name="core_status_addon_queued_publish">Queued %1$s — publish `%2$s-&lt;abi&gt;.zip` on %3$s Releases, then Install again</string>
+    <string name="core_status_addon_downloading">Downloading %1$s %2$s (%3$s)…</string>
+    <string name="core_status_addon_installed">Installed %1$s %2$s</string>
+    <string name="core_status_addon_install_failed">Install failed for %1$s: %2$s. %3$s</string>
+    <string name="core_status_addon_removed">Removed %1$s from install queue</string>
+    <string name="core_status_addon_deleted">Deleted %1$s download</string>
+    <string name="core_status_geo_downloading">Downloading geo routing databases…</string>
+    <string name="core_status_geo_installed">Installed geo data (geoip %1$.1f MB, geosite %2$.1f MB) — applies on next connect</string>
+    <string name="core_status_geo_download_failed">Geo data download failed: %1$s. %2$s</string>
+    <string name="core_status_geo_deleted">Deleted full geo data — mini geoip (LAN/CN) restored</string>
+    <string name="core_status_addon_installing_queued">Installing queued %1$s for %2$s…</string>
+    <string name="core_status_addon_installed_queued">Installed queued %1$s %2$s</string>
+    <string name="core_status_addon_queued_failed">Queued %1$s install failed. %2$s</string>
     <string name="server_preferred_core">Proxy core</string>
     <string name="tor_autosetup_ok">Tor connected</string>
     <string name="tor_autosetup_failed">Tor setup failed — try again or add bridges</string>
@@ -448,6 +486,14 @@
     <string name="logs_export_chooser">Export logs</string>
     <string name="logs_clear">Clear</string>
     <string name="logs_auto_scroll">Auto Scroll</string>
+    <string name="logs_search_hint">Search logs…</string>
+    <string name="logs_empty">No log entries yet.</string>
+
+    <!-- Charts -->
+    <string name="chart_peak">peak %1$s</string>
+    <string name="chart_no_traffic">No traffic in this range</string>
+    <string name="chart_summary_traffic">Traffic chart: %1$s downloaded, %2$s uploaded</string>
+    <string name="chart_summary_live">Live throughput: %1$s down, %2$s up</string>
 
     <!-- Servers (additional) -->
     <string name="servers_all">All</string>
@@ -544,6 +590,23 @@
     <string name="editor_encryption">Encryption (scy)</string>
     <string name="editor_reality_pbk">Reality public key (pbk)</string>
     <string name="editor_reality_sid">Reality shortId (sid)</string>
+    <string name="editor_ss_plugin">SIP003 plugin</string>
+    <string name="editor_ss_plugin_options">Plugin options</string>
+    <string name="editor_ssh_user">SSH username</string>
+    <string name="editor_ssh_private_key">SSH private key (PEM)</string>
+    <string name="editor_ssh_host_key">Pinned SSH host key</string>
+    <string name="editor_wg_private_key">WireGuard private key</string>
+    <string name="editor_wg_public_key">Peer public key</string>
+    <string name="editor_wg_preshared_key">Pre-shared key (optional)</string>
+    <string name="editor_wg_addresses">Interface addresses (comma separated)</string>
+    <string name="editor_wg_allowed_ips">Allowed IPs (comma separated)</string>
+    <string name="editor_wg_reserved">Reserved bytes (comma separated)</string>
+    <string name="editor_wg_mtu">MTU (optional)</string>
+    <string name="editor_dns_domain">DNS tunnel domain</string>
+    <string name="editor_dns_public_key">DNS tunnel public key</string>
+    <string name="editor_dns_resolver">Resolver URL or address</string>
+    <string name="editor_dns_mode">Resolver mode (doh, dot, udp)</string>
+    <string name="editor_psiphon_config">Psiphon configuration JSON</string>
     <string name="editor_allow_insecure_sub">Skip cert validation (not recommended)</string>
     <string name="editor_chain">Chain / Front proxy</string>
     <string name="editor_chain_desc">Dial this server through another one (this -&gt; front -&gt; internet).</string>
@@ -562,6 +625,14 @@
     <string name="settings_backup_saved">Backup saved</string>
     <string name="settings_backup_failed">Backup failed</string>
     <string name="settings_restore_failed">Restore failed</string>
+    <string name="settings_backup_confirm_title">Export unencrypted backup?</string>
+    <string name="settings_backup_credential_warning">This JSON file contains server credentials, private keys, settings, and subscription URLs without encryption. Save it only somewhere you trust.</string>
+    <string name="settings_backup_confirm">Export anyway</string>
+    <string name="settings_restore_confirm_title">Restore sensitive backup?</string>
+    <string name="settings_restore_credential_warning">Only restore a backup you trust. It can replace settings and import credentials and subscription URLs.</string>
+    <string name="settings_restore_confirm">Choose file</string>
+    <string name="servers_share_confirm_title">Share server credentials?</string>
+    <string name="servers_share_credential_warning">This share URI contains credentials that can grant access to the server. Send it only to someone you trust.</string>
     <string name="settings_accent_title">Accent color</string>
 
     <!-- Common -->
@@ -715,7 +786,15 @@
     <string name="wizard_want_browser">In-app Browser tab</string>
     <string name="wizard_want_hotspot">Hotspot / LAN sharing</string>
     <string name="wizard_want_cores">sing-box / Clash Meta cores</string>
-    <string name="wizard_want_analytics">Help improve V2RayEz (anonymous analytics)</string>
+    <string name="wizard_want_analytics">Help improve V2RayEz</string>
+    <string name="wizard_want_tor_desc">Route traffic through Tor bridges for extra anonymity.</string>
+    <string name="wizard_want_mitm_desc">Bypass censorship with MITM proxy and domain fronting.</string>
+    <string name="wizard_want_browser_desc">Browse privately from a built-in proxied browser tab.</string>
+    <string name="wizard_want_hotspot_desc">Share your secure connection over Wi-Fi or LAN.</string>
+    <string name="wizard_want_cores_desc">Unlock sing-box and Clash Meta as alternate engines.</string>
+    <string name="wizard_want_analytics_desc">Anonymous usage data only — never personal info.</string>
+    <string name="wizard_wants_selected_count">%1$d of %2$d selected</string>
+    <string name="wizard_wants_optional_label">Optional</string>
     <string name="wizard_welcome_subtitle">A modern VLESS, VMess, Trojan and Shadowsocks client for Android.</string>
     <string name="wizard_features_title">What you get</string>
     <string name="wizard_features_subtitle">Everything you need to run your own proxy tunnel.</string>
@@ -835,6 +914,25 @@
     <string name="mitm_ca_firefox_tip">Firefox uses its own certificate store. Open Firefox → Settings → Privacy &amp; Security → View Certificates → Authorities → Import, and pick the exported .crt file too.</string>
     <string name="mitm_ca_export_crt">Share certificate (.crt)</string>
     <string name="mitm_ca_install_failed">Could not start the installer — save to Downloads and install from Settings</string>
+    <string name="mitm_ca_enable_requires_install">Generate the certificate, install it, then confirm it\'s installed before enabling.</string>
+    <string name="mitm_ca_capture_requires_install">Generate the certificate, install it, then confirm it\'s installed before tunneling the device.</string>
+    <string name="mitm_ca_generated">Certificate generated</string>
+    <string name="mitm_ca_imported">Certificate imported</string>
+    <string name="mitm_ca_saved_downloads">Saved to Downloads as %1$s</string>
+    <string name="mitm_ca_save_failed">Could not save to Downloads — use Share certificate instead</string>
+    <string name="mitm_import_paste_both">Paste both the certificate and the private key</string>
+    <string name="mitm_guide_gen_title">Generate the local CA</string>
+    <string name="mitm_guide_gen_body">V2RayEz creates a private root certificate on this device. The private key never leaves your phone.</string>
+    <string name="mitm_guide_save_title">Save or open the certificate file</string>
+    <string name="mitm_guide_save_body">Android 11+ blocks in-app CA install. Tap Install to open the cert, or Save to Downloads (%1$s).</string>
+    <string name="mitm_guide_settings_title">Install via Settings</string>
+    <string name="mitm_guide_settings_body">Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate. Pick %1$s (or the .cer file). Confirm with your PIN/pattern.</string>
+    <string name="mitm_guide_tap_install_title">Tap Install on this device</string>
+    <string name="mitm_guide_tap_install_body">Android asks for your PIN/pattern/biometric, then shows \"%1$s\". Confirm to add it.</string>
+    <string name="mitm_guide_verify_title">Verify under USER credentials</string>
+    <string name="mitm_guide_verify_body">Settings → Security → Trusted credentials → USER should list \"%1$s\".</string>
+    <string name="mitm_guide_confirm_title">Confirm in V2RayEz</string>
+    <string name="mitm_guide_confirm_body">Back in Domain Fronting, check \"I\'ve installed it\", then enable fronting.</string>
     <string name="mitm_pc_section">Use with a PC client</string>
     <string name="mitm_pc_intro">Trust the same CA on a desktop Xray/v2rayN client so it fronts traffic the same way.</string>
     <string name="mitm_pc_share_pack">Share cert + key (.zip)</string>

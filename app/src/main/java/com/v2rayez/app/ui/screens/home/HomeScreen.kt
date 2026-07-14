@@ -5,9 +5,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -120,6 +123,7 @@ fun HomeScreen(
                 status = status,
                 server = connectionState.server,
                 errorMessage = connectionState.errorMessage,
+                onOpenCoreManager = onOpenAssets,
                 onToggle = {
                     if (status == ConnectionStatus.DISCONNECTED) {
                         vpnPermission.request { viewModel.connectAutoOrToggle() }
@@ -319,9 +323,11 @@ private fun ConnectionStatusCard(
     status: ConnectionStatus,
     server: Server?,
     errorMessage: String?,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    onOpenCoreManager: () -> Unit = {}
 ) {
     val hasError = status == ConnectionStatus.DISCONNECTED && errorMessage != null
+    val needsCore = hasError && errorMessage.orEmpty().contains("sing-box", ignoreCase = true)
     val (accent, title) = when {
         hasError -> ErrorRed to stringResource(R.string.home_connection_failed)
         status == ConnectionStatus.CONNECTED -> Connected to stringResource(R.string.home_connected)
@@ -363,6 +369,11 @@ private fun ConnectionStatusCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = ErrorRed
                     )
+                    if (needsCore) {
+                        TextButton(onClick = onOpenCoreManager) {
+                            Text(stringResource(R.string.home_open_core_manager))
+                        }
+                    }
                 } else {
                     val protocolLabel = server?.protocol?.label.orEmpty()
                     val transportLabel = server?.transport.orEmpty()
@@ -432,12 +443,14 @@ private fun PowerButton(status: ConnectionStatus, onToggle: () -> Unit) {
 
 @Composable
 private fun StatGrid(downloadLabel: String, uploadLabel: String, speedLabel: String, pingMs: Int) {
+    // IntrinsicSize.Min forces both tiles in a row to share the taller sibling's height, so a
+    // longer localized label (FA/RU) never leaves the other tile in the row looking undersized.
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
             StatTile(Icons.Filled.ArrowDownward, stringResource(R.string.home_download), downloadLabel, Modifier.weight(1f), ChartUpload)
             StatTile(Icons.Filled.ArrowUpward, stringResource(R.string.home_upload), uploadLabel, Modifier.weight(1f), MaterialTheme.colorScheme.primary)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.height(IntrinsicSize.Min)) {
             val pingLabel = if (pingMs >= 0) String.format(java.util.Locale.US, "%d ms", pingMs) else "—"
             StatTile(Icons.Filled.NetworkCheck, stringResource(R.string.home_ping), pingLabel, Modifier.weight(1f), Warning)
             StatTile(Icons.Filled.Speed, stringResource(R.string.home_speed), speedLabel, Modifier.weight(1f), Connected)
@@ -487,12 +500,14 @@ private fun QuickActions(
     onSniTunnel: () -> Unit,
     onFreeServers: () -> Unit
 ) {
+    // Equal weights (instead of unconstrained SpaceBetween) keep 5 buttons evenly spaced on
+    // narrow/compact-width phones, where fixed-size icons + SpaceBetween can crowd the edges.
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        QuickActionButton(Icons.Filled.Storage, stringResource(R.string.home_action_servers), onServers)
-        QuickActionButton(Icons.Filled.Public, stringResource(R.string.home_action_free), onFreeServers)
-        QuickActionButton(Icons.Filled.Bolt, stringResource(R.string.home_action_speed_test), onSpeedTest)
-        QuickActionButton(Icons.Filled.VpnKey, stringResource(R.string.home_action_tor), onTor)
-        QuickActionButton(Icons.Filled.Dns, stringResource(R.string.home_action_sni), onSniTunnel)
+        QuickActionButton(Icons.Filled.Storage, stringResource(R.string.home_action_servers), onServers, Modifier.weight(1f))
+        QuickActionButton(Icons.Filled.Public, stringResource(R.string.home_action_free), onFreeServers, Modifier.weight(1f))
+        QuickActionButton(Icons.Filled.Bolt, stringResource(R.string.home_action_speed_test), onSpeedTest, Modifier.weight(1f))
+        QuickActionButton(Icons.Filled.VpnKey, stringResource(R.string.home_action_tor), onTor, Modifier.weight(1f))
+        QuickActionButton(Icons.Filled.Dns, stringResource(R.string.home_action_sni), onSniTunnel, Modifier.weight(1f))
     }
 }
 

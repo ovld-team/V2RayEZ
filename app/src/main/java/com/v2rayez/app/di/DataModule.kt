@@ -40,9 +40,10 @@ object DatabaseModule {
                 V2RayDatabase.MIGRATION_3_4,
                 V2RayDatabase.MIGRATION_4_5,
                 V2RayDatabase.MIGRATION_5_6,
-                V2RayDatabase.MIGRATION_6_7
+                V2RayDatabase.MIGRATION_6_7,
+                V2RayDatabase.MIGRATION_7_8
             )
-            .fallbackToDestructiveMigration()
+            // Missing migrations fail closed to preserve stored credentials.
             .build()
 
     @Provides fun provideServerDao(db: V2RayDatabase): ServerDao = db.serverDao()

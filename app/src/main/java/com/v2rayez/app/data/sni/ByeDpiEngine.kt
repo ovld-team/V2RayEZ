@@ -33,7 +33,7 @@ class ByeDpiEngine @Inject constructor(
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var process: Process? = null
+    @Volatile private var process: Process? = null
 
     /** Optional log sink; wired to the app log by the caller. */
     var onLog: ((String) -> Unit)? = null
@@ -43,6 +43,8 @@ class ByeDpiEngine @Inject constructor(
 
     /** True when a runnable byedpi binary is downloaded or bundled on this device. */
     fun isAvailable(context: Context): Boolean = binary(context) != null
+
+    val isRunning: Boolean get() = process?.isAlive == true
 
     /**
      * Launch byedpi as a local SOCKS5 proxy on [DesyncConfig.socksHost]:[DesyncConfig.socksPort]
@@ -88,6 +90,7 @@ class ByeDpiEngine @Inject constructor(
                 }
             }
         }
+        if (process === proc) process = null
     }
 
     suspend fun stop() = withContext(Dispatchers.IO) { stopInternal() }
