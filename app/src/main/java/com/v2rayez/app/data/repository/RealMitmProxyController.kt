@@ -29,7 +29,7 @@ class RealMitmProxyController @Inject constructor(
     override fun stop() {
         val intent = Intent(context, MitmProxyService::class.java)
             .setAction(MitmProxyService.ACTION_STOP)
-        ContextCompat.startForegroundService(context, intent)
+        context.startService(intent)
     }
 
     override fun clearError() {

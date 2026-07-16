@@ -3,6 +3,7 @@ package com.v2rayez.app.data.repository
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
+import com.v2rayez.app.R
 import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.core.ConfigBuilder
 import com.v2rayez.app.data.core.GeoAssetManager
@@ -23,9 +24,12 @@ import com.v2rayez.app.domain.repository.ServerRepository
 import com.v2rayez.app.domain.repository.SettingsRepository
 import com.v2rayez.app.domain.repository.VpnController
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.net.InetSocketAddress
@@ -53,6 +57,8 @@ class RealVpnController @Inject constructor(
     override val liveThroughput: StateFlow<List<ThroughputSample>> = stateHolder.liveThroughput
     override val recentActivity: StateFlow<List<ActivityItem>> = stateHolder.recentActivity
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     override fun connect(server: Server) {
         val intent = Intent(context, V2RayVpnService::class.java)
             .setAction(V2RayVpnService.ACTION_CONNECT)
@@ -61,47 +67,64 @@ class RealVpnController @Inject constructor(
     }
 
     override fun disconnect() {
+        // stop/disconnect must NOT use startForegroundService — if the VPN service is not
+        // already in the foreground, Android will crash with ForegroundServiceDidNotStartInTimeException
+        // when onStartCommand never promotes to FG in time (or when the process is busy).
         val intent = Intent(context, V2RayVpnService::class.java)
             .setAction(V2RayVpnService.ACTION_DISCONNECT)
-        ContextCompat.startForegroundService(context, intent)
+        context.startService(intent)
     }
 
     override fun toggle() {
         when (stateHolder.connectionState.value.status) {
             ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING -> disconnect()
             ConnectionStatus.DISCONNECTED -> {
-                val intent = Intent(context, V2RayVpnService::class.java)
-                    .setAction(V2RayVpnService.ACTION_CONNECT)
-                ContextCompat.startForegroundService(context, intent)
+                // Resolve a real server before FGS — empty default/last must not trip
+                // ForegroundServiceDidNotStartInTimeException on a doomed no-server connect.
+                scope.launch {
+                    val settings = runCatching { settingsRepository.current() }.getOrNull()
+                    val id = settings?.defaultServerId ?: settings?.lastServerId
+                    val server = id?.let { runCatching { serverRepository.getServer(it) }.getOrNull() }
+                    if (server == null) {
+                        stateHolder.setError(context.getString(R.string.vpn_error_no_server))
+                        return@launch
+                    }
+                    val intent = Intent(context, V2RayVpnService::class.java)
+                        .setAction(V2RayVpnService.ACTION_CONNECT)
+                        .putExtra(V2RayVpnService.EXTRA_SERVER_ID, server.id)
+                    ContextCompat.startForegroundService(context, intent)
+                }
             }
         }
     }
 
     override suspend fun testLatency(server: Server): TestResult = withContext(Dispatchers.IO) {
-        firebaseTelemetry.traceSuspend("free_latency_test", mapOf("protocol" to server.protocol.name)) {
+        // List UI may pass a lite Server (fat columns omitted); hydrate for accurate probes.
+        val probeTarget = serverRepository.getServer(server.id) ?: server
+        firebaseTelemetry.traceSuspend("free_latency_test", mapOf("protocol" to probeTarget.protocol.name)) {
         val result = try {
             withTimeout(ACCURATE_TIMEOUT_MS) {
-                testLatencyInner(server)
+                testLatencyInner(probeTarget)
             }
         } catch (_: TimeoutCancellationException) {
             // Libv2ray's outbound-delay probe can consume the whole timeout even when the
             // endpoint itself is reachable. Do not discard that reachability signal: this
             // was making Free Servers row tests show every timed-out handshake as dead.
             tcpResult(
-                serverId = server.id,
-                tcpMs = tcpConnectMs(server.host, server.port, QUICK_TCP_TIMEOUT_MS),
+                serverId = probeTarget.id,
+                tcpMs = tcpConnectMs(probeTarget.host, probeTarget.port, QUICK_TCP_TIMEOUT_MS),
                 failureMessage = "Timed out"
             )
         }
         // Dead/slow public servers time out constantly — sampled at ~10% with a
         // false_positive_candidate tag (see FirebaseTelemetry) instead of alerting on every one.
         if (!result.success && result.message == "Timed out") {
-            runCatching { firebaseTelemetry.captureFreeTestTimeout(server.id) }
+            runCatching { firebaseTelemetry.captureFreeTestTimeout(probeTarget.id) }
             runCatching {
                 logRepository.logFree(
                     LogLevel.WARNING,
                     "Free-server test timed out",
-                    detail = "protocol=${server.protocol.name}"
+                    detail = "protocol=${probeTarget.protocol.name}"
                 )
             }
         } else if (result.success) {
@@ -109,7 +132,7 @@ class RealVpnController @Inject constructor(
                 logRepository.logFree(
                     LogLevel.INFO,
                     "Free-server test ok (${result.pingMs}ms)",
-                    detail = "protocol=${server.protocol.name}"
+                    detail = "protocol=${probeTarget.protocol.name}"
                 )
             }
         } else {
@@ -117,7 +140,7 @@ class RealVpnController @Inject constructor(
                 logRepository.logFree(
                     LogLevel.WARNING,
                     "Free-server test failed: ${result.message ?: "unknown"}",
-                    detail = "protocol=${server.protocol.name}"
+                    detail = "protocol=${probeTarget.protocol.name}"
                 )
             }
         }
@@ -125,6 +148,66 @@ class RealVpnController @Inject constructor(
         if (result.success) putMetric("latency_ms", result.pingMs.toLong())
         result
         }
+    }
+
+    override suspend fun testSiteFetch(server: Server, url: String): TestResult = withContext(Dispatchers.IO) {
+        val probeTarget = serverRepository.getServer(server.id) ?: server
+        try {
+            withTimeout(ACCURATE_TIMEOUT_MS) {
+                testSiteFetchInner(probeTarget, url)
+            }
+        } catch (_: TimeoutCancellationException) {
+            siteResult(probeTarget.id, -1L, false, "Timed out")
+        }
+    }
+
+    private suspend fun testSiteFetchInner(server: Server, url: String): TestResult {
+        val status = stateHolder.connectionState.value.status
+        val connected = status == ConnectionStatus.CONNECTED || core.isRunning || processCore.isRunning
+        val activeId = stateHolder.connectionState.value.server?.id
+
+        if (connected) {
+            if (activeId == server.id) {
+                val ms = when {
+                    core.isRunning -> core.measureConnectedDelay(url)
+                    processCore.isRunning -> processCore.measureViaSocks(processCore.localSocksPort(), url)
+                    else -> -1L
+                }
+                return if (ms > 0) {
+                    siteResult(server.id, ms, true, "")
+                } else {
+                    siteResult(server.id, ms, false, "Site fetch probe failed")
+                }
+            }
+            return siteFetchViaConfig(server, url, vpnActiveOther = true)
+        }
+
+        return siteFetchViaConfig(server, url, vpnActiveOther = false)
+    }
+
+    private suspend fun siteFetchViaConfig(
+        server: Server,
+        url: String,
+        vpnActiveOther: Boolean
+    ): TestResult {
+        val settings = settingsRepository.current()
+        val frontServer = server.frontProxyId
+            ?.takeIf { it != server.id }
+            ?.let { serverRepository.getServer(it) }
+        val config = ConfigBuilder.buildForTest(
+            server, settings, frontServer,
+            geositeAvailable = geoAssets.geositeAvailable()
+        )
+        val delay = core.measureDelay(config, url)
+        if (delay > 0) {
+            return siteResult(server.id, delay, true, "")
+        }
+        val message = when {
+            vpnActiveOther -> "Site fetch unavailable while VPN uses another server"
+            delay < 0 -> "Site fetch probe failed"
+            else -> "Timed out"
+        }
+        return siteResult(server.id, delay, false, message)
     }
 
     private suspend fun testLatencyInner(server: Server): TestResult {
@@ -222,5 +305,18 @@ class RealVpnController @Inject constructor(
             } else {
                 TestResult(serverId, -1, false, failureMessage)
             }
+
+        internal fun siteResult(serverId: String, ms: Long, success: Boolean, message: String): TestResult {
+            val siteMs = ms.takeIf { it > 0 }?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt()
+            return TestResult(
+                serverId = serverId,
+                pingMs = siteMs ?: -1,
+                success = success,
+                message = message,
+                siteOk = success,
+                siteMs = siteMs,
+                siteMessage = message.takeIf { it.isNotBlank() }
+            )
+        }
     }
 }

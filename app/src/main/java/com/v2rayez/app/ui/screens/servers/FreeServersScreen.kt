@@ -222,6 +222,7 @@ fun FreeServersScreen(
                             fromSubscription = server.id in state.addedFromSubscription,
                             isTesting = server.id in state.testing,
                             pingMs = state.pings[server.id],
+                            siteOk = state.siteResults[server.id],
                             onTest = { viewModel.test(server) },
                             onAdd = { viewModel.add(server, notify) }
                         )
@@ -240,6 +241,7 @@ private fun FreeServerRow(
     fromSubscription: Boolean,
     isTesting: Boolean,
     pingMs: Int?,
+    siteOk: Boolean? = null,
     onTest: () -> Unit,
     onAdd: () -> Unit
 ) {
@@ -298,6 +300,10 @@ private fun FreeServerRow(
             }
             HSpacer(8)
             PingBadge(pingMs = pingMs, testing = isTesting)
+            if (!isTesting && siteOk != null) {
+                HSpacer(6)
+                com.v2rayez.app.ui.components.SiteFetchBadge(siteOk)
+            }
             HSpacer(8)
             // Test-before-add: probe latency without saving the server.
             RoundIconButton(

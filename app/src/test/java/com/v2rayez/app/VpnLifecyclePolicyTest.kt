@@ -5,10 +5,14 @@ import com.v2rayez.app.data.core.hevTrafficDeltas
 import com.v2rayez.app.data.service.TOR_TUN_DNS_SERVER
 import com.v2rayez.app.data.service.TunnelHealthSnapshot
 import com.v2rayez.app.data.service.dnsIpsForTun
+import com.v2rayez.app.data.service.isSameConnectTarget
 import com.v2rayez.app.data.service.needsReconnectTeardown
 import com.v2rayez.app.data.service.protocolRuntimeAvailable
+import com.v2rayez.app.data.service.shouldWatchdogAutoReconnect
 import com.v2rayez.app.data.service.torSupportsServerProtocol
 import com.v2rayez.app.data.service.tunnelDeathReason
+import com.v2rayez.app.data.service.watchdogDeathStreak
+import com.v2rayez.app.data.service.watchdogShouldFail
 import com.v2rayez.app.domain.model.AppSettings
 import com.v2rayez.app.domain.model.DnsConfig
 import com.v2rayez.app.domain.model.Protocol
@@ -180,5 +184,44 @@ class VpnLifecyclePolicyTest {
         assertFalse(protocolRuntimeAvailable(Protocol.SSH, singBoxAvailable = false, addonAvailable = true))
         assertTrue(protocolRuntimeAvailable(Protocol.SSH, singBoxAvailable = true, addonAvailable = false))
         assertTrue(protocolRuntimeAvailable(Protocol.VLESS, singBoxAvailable = false, addonAvailable = false))
+    }
+
+    @Test
+    fun sameConnectTargetTreatsNullAsDefaultAndMatchesIds() {
+        assertTrue(isSameConnectTarget(null, null))
+        assertTrue(isSameConnectTarget("a", "a"))
+        assertFalse(isSameConnectTarget(null, "a"))
+        assertFalse(isSameConnectTarget("a", null))
+        assertFalse(isSameConnectTarget("a", "b"))
+    }
+
+    @Test
+    fun deathWatchdogRequiresThreeConsecutiveNonNullSamples() {
+        var streak = 0
+        streak = watchdogDeathStreak(streak, "Xray core stopped unexpectedly")
+        assertEquals(1, streak)
+        assertFalse(watchdogShouldFail(streak))
+        streak = watchdogDeathStreak(streak, "Xray core stopped unexpectedly")
+        assertEquals(2, streak)
+        assertFalse(watchdogShouldFail(streak))
+        streak = watchdogDeathStreak(streak, "Xray core stopped unexpectedly")
+        assertEquals(3, streak)
+        assertTrue(watchdogShouldFail(streak))
+        streak = watchdogDeathStreak(streak, null)
+        assertEquals(0, streak)
+        assertFalse(watchdogShouldFail(streak))
+    }
+
+    @Test
+    fun watchdogAutoReconnectOnlyForEngineFlapWithServer() {
+        assertTrue(
+            shouldWatchdogAutoReconnect("Xray core stopped unexpectedly", "srv-1")
+        )
+        assertFalse(
+            shouldWatchdogAutoReconnect("VPN tunnel interface closed unexpectedly", "srv-1")
+        )
+        assertFalse(shouldWatchdogAutoReconnect("Xray core stopped unexpectedly", null))
+        assertFalse(shouldWatchdogAutoReconnect("Xray core stopped unexpectedly", "tor-device"))
+        assertFalse(shouldWatchdogAutoReconnect("No server selected", "srv-1"))
     }
 }

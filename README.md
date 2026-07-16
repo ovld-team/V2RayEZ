@@ -32,12 +32,20 @@
 2. Download `V2RayEZ-v*-release.apk` and install it (unknown sources allowed).
 3. Optional: in the app open **Core manager** and install addon zips from the same Release.
 
-Current release: [`V2RayEZ-v1.0.1`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.1).
+Current release: [`V2RayEZ-v1.0.2`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.2).
 
 ### Addon packs
 
 Release assets look like `tor-arm64-v8a.zip`, `lyrebird-arm64-v8a.zip`, `psiphon-arm64-v8a.zip`, `dnstunnel-arm64-v8a.zip`, …  
-The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v1.0.1` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Local dev uses `gradle.properties`; CI release builds pass the publish tag automatically. Checksums are in `SHA256SUMS.txt`.
+The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v1.0.2` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Local dev uses `gradle.properties`; CI release builds pass the publish tag automatically. Checksums are in `SHA256SUMS.txt`.
+
+### Release notes — v1.0.2
+
+- **Crashlytics / VPN stability:** Fixed MITM stop FGS crash, VPN `onDestroy` ANR, ServerDao CursorWindow overflow on large subscriptions, and residual VPN FGS timeouts.
+- **Geo Iran:** Hardened full geo pack validation (min size + marker) so corrupt `geosite.dat` no longer emits `geosite:ir` and fails with EOF; Core Manager CTA on geo failures.
+- **Telemetry:** Stable English failure keys; demoted expected UX noise (no server / MITM CA / probes) from Crashlytics non-fatals.
+- **Core resilience:** Watchdog debounce (3 samples), one-shot auto-reconnect on engine flap, SOCKS port bind reclaim, connect debounce, core/addon download mode retries.
+- **Site fetch test:** HTTP generate_204 probe beside ping so dead tunnels that still answer TCP are visible.
 
 ### Release notes — v1.0.1
 
@@ -83,7 +91,7 @@ Release signing needs a local `keystore.properties` pointing at your keystore. N
 1. از صفحه [Releases](https://github.com/ovld-team/V2RayEZ/releases) فایل `V2RayEZ-v*-release.apk` را بگیرید و نصب کنید.
 2. برای بسته‌های افزونه، در اپ به **مدیر هسته** بروید یا زیپ‌های همان Release را نصب کنید.
 
-نسخه فعلی: [`V2RayEZ-v1.0.1`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.1).
+نسخه فعلی: [`V2RayEZ-v1.0.2`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.2).
 
 ### ساخت
 

@@ -18,6 +18,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.File
 
+/** Default URL for HTTP site-fetch connectivity probes (204/no-content). */
+const val DEFAULT_SITE_FETCH_URL = "https://www.gstatic.com/generate_204"
+
 /**
  * Backend-facing contracts. The UI depends only on these interfaces; the real
  * V2Ray-backed implementations live under `data/`, mocks under `data/mock`.
@@ -53,6 +56,15 @@ interface VpnController {
      * accepts TCP, not that the proxy protocol works; use [testLatency] for an accurate probe.
      */
     suspend fun testLatencyQuick(server: Server): TestResult
+
+    /**
+     * HTTP fetch through the server (or active tunnel) to verify the proxy can reach the internet.
+     * [url] defaults to [DEFAULT_SITE_FETCH_URL].
+     */
+    suspend fun testSiteFetch(
+        server: Server,
+        url: String = DEFAULT_SITE_FETCH_URL
+    ): TestResult
 }
 
 interface ServerRepository {
@@ -62,6 +74,8 @@ interface ServerRepository {
     suspend fun getServer(id: String): Server?
     suspend fun toggleFavorite(id: String)
     suspend fun upsert(server: Server)
+    /** Update only latency without touching credential / blob columns. */
+    suspend fun updatePing(id: String, pingMs: Int)
     suspend fun delete(id: String)
     suspend fun duplicate(id: String): Server?
 
@@ -103,6 +117,9 @@ interface ServerRepository {
 
     /** Serialize a server back to a share URI (vless://, vmess://, ...). */
     fun exportUri(server: Server): String
+
+    /** Load full rows and serialize share URIs (export / multi-select share). */
+    suspend fun exportUris(ids: List<String>): String
 }
 
 interface StatsRepository {

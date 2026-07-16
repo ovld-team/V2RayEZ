@@ -92,9 +92,40 @@ class FirebaseTelemetry @Inject constructor(
         )
     }
 
-    /** VPN connect / Tor bootstrap / MITM start failure — see [FailureCategory]. */
+    /**
+     * VPN connect / Tor bootstrap / MITM start failure — see [FailureCategory].
+     *
+     * Expected UX failures ([VpnFailureKeys.EXPECTED_UX_KEYS]) are breadcrumb + analytics only;
+     * Crashlytics non-fatals use a stable English key so localized copy does not fragment groups.
+     */
     fun captureVpnFailure(category: FailureCategory, reason: String) {
-        captureFailure(category, reason)
+        val key = VpnFailureKeys.classify(reason)
+        val scrubbed = PiiScrubber.scrub(reason)
+        val safeCategory = category.tag
+        addBreadcrumb(safeCategory, "$key: ${scrubbed.take(MAX_LOG_LINE)}", TelemetryLevel.ERROR)
+        runCatching {
+            crashlytics?.setCustomKey("vpn_failure_key", key)
+            // Do not set a sticky `detail` custom key — it persists process-wide onto later crashes.
+            crashlytics?.log("detail:${scrubbed.take(MAX_LOG_LINE)}")
+            crashlytics?.setCustomKey("failure_category", safeCategory)
+            logAnalytics(
+                "${safeCategory}_failure",
+                Bundle().apply {
+                    putString("category", safeCategory)
+                    putString("key", key)
+                }
+            )
+            recordTrace(traceNameFor(category), mapOf("result" to "failure", "key" to key))
+            if (key !in VpnFailureKeys.EXPECTED_UX_KEYS) {
+                val sanitized = sanitizedForCrashlytics(
+                    IllegalStateException("[$safeCategory] $key")
+                )
+                crashlytics?.log("[$safeCategory] $key")
+                crashlytics?.recordException(sanitized)
+                localRing.record("nonfatal:$safeCategory")
+            }
+            Log.e(TAG, "[$safeCategory] $key")
+        }
     }
 
     /** On-demand pack/asset download failure (addon binaries, geo databases, subscriptions). */
@@ -324,6 +355,7 @@ class FirebaseTelemetry @Inject constructor(
 
         fun traceNameFor(category: FailureCategory): String = when (category) {
             FailureCategory.VPN_CONNECT -> "vpn_connect"
+            FailureCategory.VPN_WATCHDOG -> "vpn_watchdog"
             FailureCategory.TOR -> "tor_bootstrap"
             FailureCategory.MITM -> "mitm_start"
             FailureCategory.DOWNLOAD -> "download_failure"
@@ -331,8 +363,86 @@ class FirebaseTelemetry @Inject constructor(
     }
 }
 
+/**
+ * Stable, low-cardinality VPN failure keys for Crashlytics grouping.
+ * Localization-agnostic: match English + known FA/RU UX strings.
+ */
+object VpnFailureKeys {
+    const val NO_SERVER = "no_server"
+    const val MITM_CA = "mitm_ca"
+    const val MITM_PROBE = "mitm_probe"
+    const val TOR_PROBE = "tor_probe"
+    const val GEO_IR = "geo_ir"
+    const val OUTBOUND_BUILD = "outbound_build"
+    const val PORT_IN_USE = "port_in_use"
+    const val CORE_DIED = "core_died"
+    const val PACK_MISSING = "pack_missing"
+    const val DESYNC = "desync"
+    const val TUN = "tun"
+    const val CORE_START = "core_start"
+    const val VPN_CONNECT = "vpn_connect"
+
+    /** User-facing expected failures — breadcrumb/analytics only, no Crashlytics exception. */
+    val EXPECTED_UX_KEYS: Set<String> = setOf(NO_SERVER, MITM_CA, MITM_PROBE, TOR_PROBE)
+
+    fun classify(reason: String): String = classifyVpnFailureKey(reason)
+}
+
+/** Pure classifier — unit-tested without Android/Firebase. */
+fun classifyVpnFailureKey(reason: String): String {
+    val r = reason.lowercase(java.util.Locale.US)
+    return when {
+        r.contains("no server") ||
+            reason.contains("سروری") ||
+            r.contains("vpn no server") ||
+            (r.contains("сервер") && r.contains("не выбран")) -> VpnFailureKeys.NO_SERVER
+
+        (r.contains("ca") && (r.contains("install") || r.contains("acknowledge") || reason.contains("نصب"))) ||
+            r.contains("domain fronting ca") ||
+            reason.contains("دامنه‌فرانتینگ") -> VpnFailureKeys.MITM_CA
+
+        r.contains("mitm tunnel probe") || r.contains("mitm proxy probe") -> VpnFailureKeys.MITM_PROBE
+
+        r.contains("tor socks") ||
+            r.contains("exit/dns probe") ||
+            r.contains("socks/exit/dns") -> VpnFailureKeys.TOR_PROBE
+
+        r.contains("geosite:ir") ||
+            r.contains("geoip:ir") ||
+            r.contains("illegal domain") ||
+            r.contains("geodata") ||
+            (r.contains("geosite") && r.contains("eof")) ||
+            (r.contains("geoip") && r.contains("eof")) -> VpnFailureKeys.GEO_IR
+
+        r.contains("failed to build outbound") ||
+            r.contains("stream settings") -> VpnFailureKeys.OUTBOUND_BUILD
+
+        r.contains("address already in use") || r.contains("10808") -> VpnFailureKeys.PORT_IN_USE
+
+        r.contains("stopped unexpectedly") ||
+            r.contains("xray core stopped") -> VpnFailureKeys.CORE_DIED
+
+        r.contains("pack is not installed") ||
+            r.contains("pack_missing") ||
+            r.contains("binary is not available") ||
+            r.contains("needs the sing-box") -> VpnFailureKeys.PACK_MISSING
+
+        r.contains("byedpi") || r.contains("desync") -> VpnFailureKeys.DESYNC
+
+        r.contains("tun interface") ||
+            r.contains("failed to create tun") ||
+            r.contains("tun bridge") -> VpnFailureKeys.TUN
+
+        r.contains("core failed to start") ||
+            (r.contains("core") && r.contains("failed to start")) -> VpnFailureKeys.CORE_START
+
+        else -> VpnFailureKeys.VPN_CONNECT
+    }
+}
+
 enum class FailureCategory(val tag: String) {
     VPN_CONNECT("vpn_connect"),
+    VPN_WATCHDOG("vpn_watchdog"),
     TOR("tor"),
     MITM("mitm"),
     DOWNLOAD("download")

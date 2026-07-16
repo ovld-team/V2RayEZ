@@ -546,6 +546,8 @@
     <string name="servers_subscriptions">Подписки</string>
     <string name="servers_share_chooser">Поделиться сервером</string>
     <string name="servers_testing">Проверка…</string>
+    <string name="servers_site_ok">Сайт OK</string>
+    <string name="servers_site_fail">Сайт недоступен</string>
     <string name="servers_favorite">Избранное</string>
     <string name="servers_connected_label">Подключено</string>
     <string name="servers_default_badge">Сервер по умолчанию</string>
@@ -906,6 +908,7 @@
     <string name="sheet_duplicate_server">Дублировать сервер</string>
     <string name="sheet_share_server">Поделиться сервером</string>
     <string name="sheet_test_latency">Проверить пинг</string>
+    <string name="sheet_test_connectivity">Пинг и сайт</string>
     <string name="sheet_delete_server">Удалить сервер</string>
     <string name="sheet_qr_unable">Не удалось показать QR</string>
     <string name="activity_connected_to">Подключено к %1$s</string>

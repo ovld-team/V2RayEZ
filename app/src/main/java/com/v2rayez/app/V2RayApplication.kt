@@ -55,6 +55,9 @@ class V2RayApplication : Application(), Configuration.Provider {
         super.onCreate()
         firebaseTelemetry.enableTelemetry()
         installCrashLogger()
+        // Pre-create VPN notification channels so the first startForegroundService →
+        // startForeground path never races channel creation on cold start (FGS 5s deadline).
+        runCatching { ensureVpnNotificationChannels() }
         restoreTor()
         runCatching { SubscriptionRefreshWorker.schedule(this) }
             .onFailure { Log.w("V2RayApplication", "WorkManager schedule failed", it) }
@@ -104,6 +107,46 @@ class V2RayApplication : Application(), Configuration.Provider {
         changed("bypass_mainland", old.routing.bypassMainland, new.routing.bypassMainland)
         changed("bypass_iran", old.routing.bypassIran, new.routing.bypassIran)
         changed("block_ads", old.routing.blockAds, new.routing.blockAds)
+    }
+
+    /**
+     * Pre-create VPN FG notification channels at process start so
+     * [com.v2rayez.app.data.service.V2RayVpnService] can call startForeground within the
+     * Android ~5s FGS deadline even on cold start.
+     */
+    private fun ensureVpnNotificationChannels() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return
+        val nm = getSystemService(android.app.NotificationManager::class.java) ?: return
+        val channelId = "vpn_status"
+        val quietId = "vpn_status_quiet"
+        if (nm.getNotificationChannel(quietId) == null) {
+            nm.createNotificationChannel(
+                android.app.NotificationChannel(
+                    quietId,
+                    "VPN Status (silent)",
+                    android.app.NotificationManager.IMPORTANCE_MIN
+                ).apply {
+                    setShowBadge(false)
+                    setSound(null, null)
+                    enableVibration(false)
+                }
+            )
+        }
+        val existing = nm.getNotificationChannel(channelId)
+        if (existing == null || existing.importance < android.app.NotificationManager.IMPORTANCE_DEFAULT) {
+            if (existing != null) nm.deleteNotificationChannel(channelId)
+            nm.createNotificationChannel(
+                android.app.NotificationChannel(
+                    channelId,
+                    "VPN Status",
+                    android.app.NotificationManager.IMPORTANCE_DEFAULT
+                ).apply {
+                    setShowBadge(false)
+                    setSound(null, null)
+                    enableVibration(false)
+                }
+            )
+        }
     }
 
     /**

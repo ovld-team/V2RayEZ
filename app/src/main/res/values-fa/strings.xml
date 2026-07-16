@@ -527,6 +527,8 @@
     <string name="servers_subscriptions">اشتراک‌ها</string>
     <string name="servers_share_chooser">اشتراک‌گذاری سرور</string>
     <string name="servers_testing">در حال آزمایش…</string>
+    <string name="servers_site_ok">سایت OK</string>
+    <string name="servers_site_fail">سایت ناموفق</string>
     <string name="servers_favorite">مورد علاقه</string>
     <string name="servers_connected_label">متصل</string>
     <string name="servers_default_badge">سرور پیش‌فرض</string>
@@ -872,6 +874,7 @@
     <string name="sheet_duplicate_server">کپی سرور</string>
     <string name="sheet_share_server">اشتراک‌گذاری سرور</string>
     <string name="sheet_test_latency">تست تأخیر</string>
+    <string name="sheet_test_connectivity">تست پینگ و سایت</string>
     <string name="sheet_delete_server">حذف سرور</string>
     <string name="sheet_qr_unable">نمی‌توان QR را نمایش داد</string>
     <string name="activity_connected_to">متصل به %1$s</string>

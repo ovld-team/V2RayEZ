@@ -290,16 +290,42 @@ class AddonPackManager @Inject constructor(
             work.mkdirs()
             val archive = File(work, release.assetName)
             Log.i(TAG, "Downloading ${release.assetName} for ${packId.label} (${deviceAbi.androidAbi}, mode=$mode)")
-            val outcome = downloadTransport.download(release.downloadUrl, archive, mode = mode, tag = "addon:${packId.name}:${release.version}")
-            val downloaded = (outcome as? DownloadOutcome.Success)
-                ?: error("download failed: ${(outcome as DownloadOutcome.Failed).error.message}")
+            // Retry with alternate DownloadMode when AUTO/primary path fails (censorship /
+            // flaky GitHub). Bug reports cited repeated Xray/addon pack download failures.
+            val attemptModes = when (mode) {
+                DownloadMode.AUTO -> listOf(DownloadMode.AUTO, DownloadMode.THROUGH, DownloadMode.DIRECT)
+                DownloadMode.DIRECT -> listOf(DownloadMode.DIRECT, DownloadMode.THROUGH)
+                DownloadMode.THROUGH -> listOf(DownloadMode.THROUGH, DownloadMode.DIRECT)
+            }.distinct()
+            var downloadedFile: java.io.File? = null
+            var lastDlError: String? = null
+            for (attempt in attemptModes) {
+                val outcome = downloadTransport.download(
+                    release.downloadUrl,
+                    archive,
+                    mode = attempt,
+                    tag = "addon:${packId.name}:${release.version}"
+                )
+                when (outcome) {
+                    is DownloadOutcome.Success -> {
+                        downloadedFile = outcome.file
+                        break
+                    }
+                    is DownloadOutcome.Failed -> {
+                        lastDlError = outcome.error.message
+                        Log.w(TAG, "download attempt mode=$attempt failed: ${outcome.error.message}")
+                    }
+                }
+            }
+            val downloaded = downloadedFile
+                ?: error("download failed after ${attemptModes.size} modes: ${lastDlError ?: "unknown"}")
             if (release.sha256.isNullOrBlank()) {
                 // SHA256SUMS.txt sidecar was unreachable — integrity then rests on GitHub HTTPS
                 // plus the ABI/ELF checks below. Log loudly rather than fail a censored user who
                 // can't reach the sidecar but got the archive through the tunnel.
                 Log.w(TAG, "No sha256 pinned for ${release.assetName} — installing on HTTPS+ELF trust only")
             }
-            require(NativeBinaryStore.verifySha256(downloaded.file, release.sha256)) {
+            require(NativeBinaryStore.verifySha256(downloaded, release.sha256)) {
                 "sha256 mismatch for ${release.assetName}"
             }
             val extracted = NativeBinaryStore.extractArchive(archive, work, listOf(packId.binaryFileName))

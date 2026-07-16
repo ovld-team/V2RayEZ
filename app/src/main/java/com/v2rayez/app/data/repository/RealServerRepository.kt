@@ -110,6 +110,8 @@ class RealServerRepository @Inject constructor(
 
     override suspend fun upsert(server: Server) = serverDao.upsert(server.toEntity())
 
+    override suspend fun updatePing(id: String, pingMs: Int) = serverDao.setPing(id, pingMs)
+
     override suspend fun delete(id: String) = serverDao.delete(id)
 
     override suspend fun duplicate(id: String): Server? {
@@ -194,9 +196,7 @@ class RealServerRepository @Inject constructor(
 
         database.withTransaction {
             // MERGE rather than delete+reinsert so pings, favorites, and in-place user edits survive.
-            val existing = serverDao.getAll()
-                .map { it.toModel() }
-                .filter { it.subscriptionId == id }
+            val existing = serverDao.getBySubscription(id).map { it.toModel() }
             val plan = planSubscriptionMerge(existing, parsed, id)
 
             // Servers that disappeared from the feed are removed, UNLESS the user edited them.
@@ -219,7 +219,7 @@ class RealServerRepository @Inject constructor(
 
     override suspend fun backupSnapshot(): BackupSnapshot = database.withTransaction {
         BackupSnapshot(
-            servers = serverDao.getAll().map { it.toModel() },
+            servers = serverDao.getAllFull().map { it.toModel() },
             subscriptions = subscriptionDao.getAll().map { it.toModel() }
         )
     }
@@ -284,6 +284,11 @@ class RealServerRepository @Inject constructor(
     }
 
     override fun exportUri(server: Server): String = ProxyParser.toUri(server)
+
+    override suspend fun exportUris(ids: List<String>): String =
+        ids.mapNotNull { id -> getServer(id)?.let { exportUri(it) } }
+            .joinToString("\n")
+            .trim()
 
     private fun parseBody(
         body: String,

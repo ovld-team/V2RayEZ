@@ -299,7 +299,7 @@ fun ServerActionsSheet(
             ActionItem(Icons.Filled.ContentCopy, stringResource(R.string.sheet_duplicate_server), onDuplicate)
             ActionItem(Icons.Filled.Share, stringResource(R.string.sheet_share_server), onShare)
             ActionItem(Icons.Filled.QrCode, stringResource(R.string.servers_action_qr), onQr)
-            ActionItem(Icons.Filled.NetworkPing, stringResource(R.string.sheet_test_latency), onTest)
+            ActionItem(Icons.Filled.NetworkPing, stringResource(R.string.sheet_test_connectivity), onTest)
             ActionItem(Icons.Filled.Delete, stringResource(R.string.sheet_delete_server), onDelete, ErrorRed)
         }
     }

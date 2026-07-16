@@ -548,6 +548,8 @@
     <string name="servers_subscriptions">Subscriptions</string>
     <string name="servers_share_chooser">Share server</string>
     <string name="servers_testing">Testing…</string>
+    <string name="servers_site_ok">Site OK</string>
+    <string name="servers_site_fail">Site fail</string>
     <string name="servers_favorite">Favorite</string>
     <string name="servers_connected_label">Connected</string>
     <string name="servers_default_badge">Default server</string>
@@ -908,6 +910,7 @@
     <string name="sheet_duplicate_server">Duplicate Server</string>
     <string name="sheet_share_server">Share Server</string>
     <string name="sheet_test_latency">Test Latency</string>
+    <string name="sheet_test_connectivity">Test ping &amp; site</string>
     <string name="sheet_delete_server">Delete Server</string>
     <string name="sheet_qr_unable">Unable to render QR</string>
     <string name="activity_connected_to">Connected to %1$s</string>

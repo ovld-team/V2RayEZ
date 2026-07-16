@@ -33,6 +33,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.v2rayez.app.R
 import com.v2rayez.app.domain.model.Server
 import com.v2rayez.app.ui.theme.Connected
+import com.v2rayez.app.ui.theme.ErrorRed
 import com.v2rayez.app.ui.theme.Warning
 
 /**
@@ -99,6 +102,8 @@ fun ServerListItem(
      * Servers browser renders its own row and never passes this.
      */
     usageBytes: Long? = null,
+    /** HTTP site-fetch probe outcome; null = not tested yet. */
+    siteOk: Boolean? = null,
     onLongClick: (() -> Unit)? = null
 ) {
     val highlight = when {
@@ -180,6 +185,10 @@ fun ServerListItem(
                 Box(Modifier.size(8.dp).clip(CircleShape).background(Connected))
                 HSpacer(8)
             }
+            if (!testing && siteOk != null) {
+                SiteFetchBadge(siteOk)
+                HSpacer(6)
+            }
             if (testing) {
                 // Sized up from 16.dp with an explicit track so the probe spinner reads as
                 // obvious motion instead of a barely-visible dot (matches the fix applied to
@@ -201,6 +210,31 @@ fun ServerListItem(
                 modifier = Modifier.size(20.dp).clip(CircleShape).clickable(onClick = onMenuClick)
             )
         }
+    }
+}
+
+/** Compact site-fetch probe badge shown beside ping on server rows. */
+@Composable
+fun SiteFetchBadge(siteOk: Boolean, modifier: Modifier = Modifier) {
+    val (glyph, tint, label) = if (siteOk) {
+        Triple("✓", Connected, stringResource(R.string.servers_site_ok))
+    } else {
+        Triple("✕", ErrorRed, stringResource(R.string.servers_site_fail))
+    }
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(tint.copy(alpha = 0.16f))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            glyph,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = tint,
+            modifier = Modifier.semantics { contentDescription = label }
+        )
     }
 }
 

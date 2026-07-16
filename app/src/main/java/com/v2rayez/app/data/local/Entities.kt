@@ -71,6 +71,62 @@ data class ServerEntity(
     val psiphonConfig: String = ""
 )
 
+/**
+ * List-safe Room projection for [ServerDao.observeAll] — omits large text blobs
+ * (rawUri, SSH/WG keys, Psiphon JSON) that blow Android's ~2 MiB CursorWindow
+ * when hundreds of subscription servers are observed at once.
+ */
+data class ServerListEntity(
+    val id: String,
+    val name: String,
+    val country: String,
+    val countryCode: String,
+    val protocol: Protocol,
+    val transport: String,
+    val security: String,
+    val sni: String,
+    val address: String,
+    val pingMs: Int,
+    val signal: Int,
+    val group: ServerGroup,
+    val isFavorite: Boolean,
+    val host: String,
+    val port: Int,
+    val uuid: String,
+    val password: String,
+    val method: String,
+    val ssPlugin: String = "",
+    val ssPluginOptions: String = "",
+    val alterId: Int,
+    val flow: String,
+    val network: String,
+    val headerType: String,
+    val path: String,
+    val requestHost: String,
+    val streamSecurity: String,
+    val alpn: String,
+    val fingerprint: String,
+    val allowInsecure: Boolean,
+    val publicKey: String,
+    val shortId: String,
+    val spiderX: String,
+    val subscriptionId: String?,
+    val frontProxyId: String? = null,
+    val userModified: Boolean = false,
+    val sortOrder: Int = 0,
+    val customGroup: String? = null,
+    val preferredCore: String = "SYSTEM",
+    val sshUser: String = "",
+    val wgLocalAddresses: String = "",
+    val wgAllowedIps: String = "0.0.0.0/0,::/0",
+    val wgReserved: String = "",
+    val wgMtu: Int = 0,
+    val dnsTunnelDomain: String = "",
+    val dnsTunnelPubKey: String = "",
+    val dnsTunnelResolver: String = "",
+    val dnsTunnelMode: String = "doh"
+)
+
 @Entity(tableName = "subscriptions")
 data class SubscriptionEntity(
     @PrimaryKey val id: String,

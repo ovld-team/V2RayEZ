@@ -39,6 +39,14 @@ class MockVpnController : VpnController {
         TestResult(server.id, server.pingMs, true)
     override suspend fun testLatencyQuick(server: Server): TestResult =
         TestResult(server.id, server.pingMs, true)
+    override suspend fun testSiteFetch(server: Server, url: String): TestResult =
+        TestResult(
+            server.id,
+            server.pingMs,
+            true,
+            siteOk = true,
+            siteMs = server.pingMs.takeIf { it > 0 }
+        )
 }
 
 class MockMitmProxyController : MitmProxyController {
@@ -55,6 +63,7 @@ class MockServerRepository : ServerRepository {
     override suspend fun getServer(id: String): Server? = MockData.servers.firstOrNull { it.id == id }
     override suspend fun toggleFavorite(id: String) = Unit
     override suspend fun upsert(server: Server) = Unit
+    override suspend fun updatePing(id: String, pingMs: Int) = Unit
     override suspend fun delete(id: String) = Unit
     override suspend fun duplicate(id: String): Server? = null
     override suspend fun importFromText(text: String): ImportResult = ImportResult(true, 1)
@@ -76,6 +85,8 @@ class MockServerRepository : ServerRepository {
     override suspend fun setFavoriteAll(ids: List<String>, favorite: Boolean) = Unit
     override suspend fun setCustomGroup(ids: List<String>, group: String?) = Unit
     override fun exportUri(server: Server): String = server.rawUri
+    override suspend fun exportUris(ids: List<String>): String =
+        ids.mapNotNull { id -> getServer(id)?.let { exportUri(it) } }.joinToString("\n").trim()
 }
 
 class MockStatsRepository : StatsRepository {

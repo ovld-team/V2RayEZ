@@ -309,10 +309,9 @@ class DownloadTransport @Inject constructor(
             }
 
             override fun onResponse(call: Call, response: Response) {
-                // resume-with-onCancellation: if the coroutine is cancelled between the
-                // isCancelled check and delivery, the response body is still closed.
+                // Non-deprecated resume overload closes the body if delivery is cancelled.
                 if (!cont.isCancelled) {
-                    cont.resume(response) { _ -> runCatching { response.close() } }
+                    cont.resume(response) { _, value, _ -> runCatching { value.close() } }
                 } else {
                     response.close()
                 }

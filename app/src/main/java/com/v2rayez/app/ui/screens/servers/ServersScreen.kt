@@ -160,8 +160,10 @@ fun ServersScreen(
                     onFavorite = { viewModel.favoriteSelected(true) },
                     onMove = { showMoveSelected = true },
                     onShare = {
-                        val text = viewModel.exportSelected()
-                        if (text.isNotBlank()) pendingShareText = text
+                        scope.launch {
+                            val text = viewModel.exportSelected()
+                            if (text.isNotBlank()) pendingShareText = text
+                        }
                     },
                     onDelete = viewModel::deleteSelected
                 )
@@ -260,6 +262,7 @@ fun ServersScreen(
                                 SwipeableServerItem(
                                     server = server,
                                     testing = server.id in state.testing,
+                                    siteOk = state.siteResults[server.id],
                                     selected = server.id in state.selected,
                                     connected = server.id == state.connectedId,
                                     isDefault = server.id == state.defaultServerId,
@@ -327,7 +330,9 @@ fun ServersScreen(
             },
             onDuplicate = { viewModel.duplicate(s.id); menuTarget = null },
             onShare = {
-                pendingShareText = viewModel.exportUri(s)
+                scope.launch {
+                    pendingShareText = viewModel.exportUriForId(s.id)
+                }
                 menuTarget = null
             },
             onQr = { qrTarget = s; menuTarget = null },
@@ -337,11 +342,17 @@ fun ServersScreen(
         )
     }
     qrTarget?.let { s ->
-        QrShareSheet(
-            title = s.name,
-            content = viewModel.exportUri(s),
-            onDismiss = { qrTarget = null }
-        )
+        var qrContent by remember(s.id) { mutableStateOf<String?>(null) }
+        androidx.compose.runtime.LaunchedEffect(s.id) {
+            qrContent = viewModel.exportUriForId(s.id)
+        }
+        qrContent?.let { content ->
+            QrShareSheet(
+                title = s.name,
+                content = content,
+                onDismiss = { qrTarget = null }
+            )
+        }
     }
     pendingShareText?.let { content ->
         androidx.compose.material3.AlertDialog(
@@ -672,6 +683,7 @@ private fun CountBadge(count: Int) {
 private fun SwipeableServerItem(
     server: Server,
     testing: Boolean,
+    siteOk: Boolean? = null,
     selected: Boolean,
     connected: Boolean,
     isDefault: Boolean,
@@ -690,6 +702,7 @@ private fun SwipeableServerItem(
             onClick = onClick,
             onMenuClick = onMenuClick,
             testing = testing,
+            siteOk = siteOk,
             selected = selected,
             connected = connected,
             isDefault = isDefault,
@@ -716,6 +729,7 @@ private fun SwipeableServerItem(
             onClick = onClick,
             onMenuClick = onMenuClick,
             testing = testing,
+            siteOk = siteOk,
             selected = selected,
             connected = connected,
             isDefault = isDefault,

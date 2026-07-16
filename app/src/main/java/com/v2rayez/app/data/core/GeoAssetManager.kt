@@ -58,8 +58,8 @@ class GeoAssetManager @Inject constructor(
             "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download"
 
         /** A full geoip.dat is ~15–20 MB; anything tiny is a truncated/HTML error body. */
-        private const val MIN_GEOIP_BYTES = 1L * 1024 * 1024
-        private const val MIN_GEOSITE_BYTES = 512L * 1024
+        const val MIN_GEOIP_BYTES = 1L * 1024 * 1024
+        const val MIN_GEOSITE_BYTES = 512L * 1024
     }
 
     /** Progress/cancel tags used for the two underlying [fetchOne] calls — Core manager combines them. */
@@ -75,12 +75,61 @@ class GeoAssetManager @Inject constructor(
 
     private fun marker() = File(assetDir(), MARKER)
 
-    /** True when the full geosite database is installed — gates every `geosite:*` config rule. */
-    fun geositeAvailable(): Boolean = File(assetDir(), GEOSITE).let { it.exists() && it.length() > 0 }
+    private fun geositeFile() = File(assetDir(), GEOSITE)
+    private fun geoipFile() = File(assetDir(), GEOIP)
+
+    /**
+     * True when a verified full geosite database is installed — gates every `geosite:*` rule.
+     *
+     * Requires the download marker AND both dats to meet the same minimum sizes used at
+     * download time. A truncated/corrupt geosite.dat that merely `exists() && length() > 0`
+     * previously passed and caused Xray `geosite:ir … EOF` connect failures (Crashlytics).
+     *
+     * Read-only: never deletes files here (mid-session probes must not strip geosite under a
+     * live core). Call [repairCorruptPackIfNeeded] from connect / Core Manager / startup.
+     */
+    fun geositeAvailable(): Boolean = isFullPackHealthy()
 
     fun state(): GeoDataState =
-        if (marker().exists() && geositeAvailable()) GeoDataState.DOWNLOADED else GeoDataState.BUILT_IN_MINI
+        if (isFullPackHealthy()) GeoDataState.DOWNLOADED else GeoDataState.BUILT_IN_MINI
 
+    /** Marker + both dats present at verified minimum sizes. */
+    private fun isFullPackHealthy(): Boolean {
+        if (!marker().exists()) return false
+        val geosite = geositeFile()
+        val geoip = geoipFile()
+        return geosite.isFile && geosite.length() >= MIN_GEOSITE_BYTES &&
+            geoip.isFile && geoip.length() >= MIN_GEOIP_BYTES
+    }
+
+    /**
+     * If an incomplete/corrupt full pack is present (marker or undersized dats), delete it and
+     * restore the mini geoip. Safe to call before connect / from Core Manager — not from hot
+     * read paths.
+     */
+    fun repairCorruptPackIfNeeded(): Boolean {
+        if (isFullPackHealthy()) return false
+        if (!geositeFile().exists() && !marker().exists() && !geoipFile().exists()) return false
+        // Mini geoip alone (no marker) is the normal out-of-box state — leave it.
+        if (!marker().exists() && !geositeFile().exists()) return false
+        Log.w(TAG, "Corrupt/incomplete geo pack detected — repairing to mini geoip")
+        repairCorruptPack()
+        return true
+    }
+
+    /** Drop bad full dats and restore the packaged mini geoip so routing stays usable. */
+    private fun repairCorruptPack() {
+        runCatching {
+            geositeFile().delete()
+            // Only delete geoip when it looks truncated; keep a healthy full geoip if present.
+            val geoip = geoipFile()
+            if (!geoip.isFile || geoip.length() < MIN_GEOIP_BYTES) {
+                geoip.delete()
+            }
+            marker().delete()
+            V2RayCore.copyMiniGeoipFallback(context, assetDir())
+        }.onFailure { Log.e(TAG, "geo pack repair failed", it) }
+    }
     /** Human-readable installed version (release tag is not tracked; expose the download date). */
     fun installedLabel(): String? =
         marker().takeIf { it.exists() }?.readText()?.trim()?.takeIf { it.isNotBlank() }

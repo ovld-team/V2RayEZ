@@ -54,19 +54,23 @@ class MitmProxyService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val notifText = when (intent?.action) {
+            ACTION_STOP -> getString(R.string.mitm_stop) + "…"
+            else -> getString(R.string.mitm_proxy_notif_starting)
+        }
+        runCatching {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(getString(R.string.mitm_proxy_notif_title), notifText)
+            )
+        }.onFailure { Log.e(TAG, "startForeground failed", it) }
+
         when (intent?.action) {
             ACTION_STOP -> {
                 scope.launch { stopProxy() }
                 return START_NOT_STICKY
             }
             else -> {
-                startForeground(
-                    NOTIFICATION_ID,
-                    buildNotification(
-                        getString(R.string.mitm_proxy_notif_title),
-                        getString(R.string.mitm_proxy_notif_starting)
-                    )
-                )
                 startJob?.cancel()
                 startJob = scope.launch { startProxy() }
             }

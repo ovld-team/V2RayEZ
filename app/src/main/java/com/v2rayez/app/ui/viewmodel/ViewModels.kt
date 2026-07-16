@@ -172,7 +172,7 @@ class HomeViewModel @Inject constructor(
                 async {
                     gate.withPermit {
                         val ping = runCatching { vpn.testLatencyQuick(server).pingMs }.getOrDefault(-1)
-                        runCatching { servers.upsert(server.copy(pingMs = ping)) }
+                        runCatching { servers.updatePing(server.id, ping) }
                         server to ping
                     }
                 }
@@ -245,7 +245,9 @@ data class ServersUiState(
     /** Lifetime traffic (down + up bytes) per server id — drives Servers-list traffic labels. */
     val usageByServer: Map<String, Long> = emptyMap(),
     /** Last ping failure reason for snackbar / inline hint. */
-    val lastPingMessage: String? = null
+    val lastPingMessage: String? = null,
+    /** HTTP site-fetch probe outcome per server id (true = OK, false = failed). */
+    val siteResults: Map<String, Boolean> = emptyMap()
 ) {
     val selectionMode: Boolean get() = selected.isNotEmpty()
 
@@ -357,6 +359,9 @@ class ServersViewModel @Inject constructor(
     private val _lastPingMessage = MutableStateFlow<String?>(null)
     val lastPingMessage: StateFlow<String?> = _lastPingMessage
 
+    private val _siteResults = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val siteResults: StateFlow<Map<String, Boolean>> = _siteResults
+
     /** Surfaces pull-to-refresh / auto-refresh failures the old silent `runCatching` swallowed. */
     private val _refreshError = MutableStateFlow<String?>(null)
     val refreshError: StateFlow<String?> = _refreshError
@@ -383,8 +388,9 @@ class ServersViewModel @Inject constructor(
             combine(query, sortMode) { q, sort -> q to sort },
             combine(vpn.connectionState, testing, selected) { conn, testSet, sel -> Triple(conn, testSet, sel) },
             settings.settings().map { it.defaultServerId },
-            stats.serverUsage()
-        ) { serversAndSubs, filters, connTestSel, defaultId, usage ->
+            combine(stats.serverUsage(), _siteResults) { usage, site -> usage to site }
+        ) { serversAndSubs, filters, connTestSel, defaultId, usageSite ->
+            val (usage, siteResults) = usageSite
             val (servers, subs) = serversAndSubs
             val (q, sort) = filters
             val (conn, testSet, sel) = connTestSel
@@ -400,6 +406,7 @@ class ServersViewModel @Inject constructor(
                 testing = testSet,
                 sortMode = sort,
                 usageByServer = usage,
+                siteResults = siteResults,
                 // Prune selections for servers that no longer exist.
                 selected = sel.filterTo(mutableSetOf()) { id -> servers.any { it.id == id } }
             )
@@ -463,6 +470,9 @@ class ServersViewModel @Inject constructor(
     fun duplicate(id: String) = viewModelScope.launch { repo.duplicate(id) }
     fun exportUri(server: Server): String = repo.exportUri(server)
 
+    suspend fun exportUriForId(id: String): String =
+        repo.getServer(id)?.let { repo.exportUri(it) }.orEmpty()
+
     /** Assign a single server to a custom group (null/blank clears it). */
     fun setCustomGroup(serverId: String, group: String?) =
         viewModelScope.launch { repo.setCustomGroup(listOf(serverId), group) }
@@ -471,12 +481,24 @@ class ServersViewModel @Inject constructor(
         viewModelScope.launch {
             testing.update { it + server.id }
             try {
-                val result = runCatching { vpn.testLatency(server) }.getOrNull()
-                // Persist the REAL result: keep -1 for blocked/timed-out so the UI can show "—".
-                repo.upsert(server.copy(pingMs = result?.pingMs ?: -1))
-                if (result != null && !result.success && result.message.isNotBlank()) {
-                    _lastPingMessage.value = result.message
+                val ping = runCatching { vpn.testLatency(server) }.getOrNull()
+                val site = runCatching { vpn.testSiteFetch(server) }.getOrNull()
+                val merged = when {
+                    ping != null && site != null -> ping.mergeSiteFetch(site)
+                    ping != null -> ping
+                    site != null -> site
+                    else -> null
                 }
+                // Persist the REAL result: keep -1 for blocked/timed-out so the UI can show "—".
+                repo.updatePing(server.id, merged?.pingMs ?: -1)
+                merged?.siteOk?.let { ok -> _siteResults.update { it + (server.id to ok) } }
+                val msgs = buildList {
+                    if (merged != null && !merged.success && merged.message.isNotBlank()) add(merged.message)
+                    if (merged?.siteOk == false) {
+                        add(merged.siteMessage?.takeIf { it.isNotBlank() } ?: "Site fetch failed")
+                    }
+                }
+                if (msgs.isNotEmpty()) _lastPingMessage.value = msgs.joinToString(" · ")
             } finally {
                 testing.update { it - server.id }
             }
@@ -507,13 +529,8 @@ class ServersViewModel @Inject constructor(
         clearSelection()
     }
 
-    /** Share URIs of the selected servers, newline-separated. */
-    fun exportSelected(): String {
-        val ids = selected.value
-        return state.value.servers.filter { it.id in ids }
-            .joinToString("\n") { repo.exportUri(it) }
-            .trim()
-    }
+    /** Share URIs of the selected servers, newline-separated (loads full rows by id). */
+    suspend fun exportSelected(): String = repo.exportUris(selected.value.toList())
 
     // --- Latency ---
     // Bulk path uses the TCP-quick probe: high concurrency, no Xray core mutex contention,
@@ -528,7 +545,7 @@ class ServersViewModel @Inject constructor(
                     async {
                         gate.withPermit {
                             val ping = runCatching { vpn.testLatencyQuick(server).pingMs }.getOrDefault(-1)
-                            repo.upsert(server.copy(pingMs = ping))
+                            repo.updatePing(server.id, ping)
                             testing.update { it - server.id }
                             server to ping
                         }
@@ -676,6 +693,8 @@ data class FreeServersUiState(
     val addedFromSubscription: Set<String> = emptySet(),
     /** id -> measured ping (ms); -1 = tested and unreachable. Untested ids are absent. */
     val pings: Map<String, Int> = emptyMap(),
+    /** id -> HTTP site-fetch probe outcome (true = OK, false = failed). */
+    val siteResults: Map<String, Boolean> = emptyMap(),
     val testing: Set<String> = emptySet(),
     /** Progress and failures for the active bulk probe; null otherwise. */
     val testProgress: FreeProbeProgress? = null,
@@ -716,6 +735,7 @@ class FreeServersViewModel @Inject constructor(
     private val loading = MutableStateFlow(false)
     private val error = MutableStateFlow<String?>(null)
     private val pings = MutableStateFlow<Map<String, Int>>(emptyMap())
+    private val siteResults = MutableStateFlow<Map<String, Boolean>>(emptyMap())
     private val testing = MutableStateFlow<Set<String>>(emptySet())
     private val testProgress = MutableStateFlow<FreeProbeProgress?>(null)
     private val probeError = MutableStateFlow<String?>(null)
@@ -742,8 +762,8 @@ class FreeServersViewModel @Inject constructor(
             combine(loading, error, testProgress, probeError) { l, e, p, probeErr ->
                 LoadAndProbeState(l, e, p, probeErr)
             },
-            combine(pings, testing, sortByPing, workingOnly) { pg, t, sort, working ->
-                FreeFilters(pg, t, sort, working)
+            combine(pings, siteResults, testing, sortByPing, workingOnly) { pg, site, t, sort, working ->
+                FreeFilters(pg, site, t, sort, working)
             }
         ) { (list, added, fromSub), loadState, filters ->
             var display = list
@@ -758,6 +778,7 @@ class FreeServersViewModel @Inject constructor(
                 added = added,
                 addedFromSubscription = fromSub,
                 pings = filters.pings,
+                siteResults = filters.siteResults,
                 testing = filters.testing,
                 testProgress = loadState.progress,
                 probeError = loadState.probeError,
@@ -768,6 +789,7 @@ class FreeServersViewModel @Inject constructor(
 
     private data class FreeFilters(
         val pings: Map<String, Int>,
+        val siteResults: Map<String, Boolean>,
         val testing: Set<String>,
         val sortByPing: Boolean,
         val workingOnly: Boolean
@@ -792,8 +814,10 @@ class FreeServersViewModel @Inject constructor(
                 .let(::withStableDisplayNames)
             // Carry test results over for servers that survived the refresh (stable key).
             val oldPings = fetched.value.associate { key(it) to pings.value[it.id] }
+            val oldSites = fetched.value.associate { key(it) to siteResults.value[it.id] }
             fetched.update { list }
             pings.update { list.mapNotNull { s -> oldPings[key(s)]?.let { p -> s.id to p } }.toMap() }
+            siteResults.update { list.mapNotNull { s -> oldSites[key(s)]?.let { ok -> s.id to ok } }.toMap() }
             if (list.isEmpty()) error.update { "Couldn't load free servers. Pull to retry." }
             loading.update { false }
         }
@@ -813,18 +837,31 @@ class FreeServersViewModel @Inject constructor(
             val myJob = coroutineContext[kotlinx.coroutines.Job]
             testing.update { it + server.id }
             try {
-                val ping = try {
-                    val result = vpn.testLatency(server)
-                    if (result.success) result.pingMs else {
-                        probeError.update { result.message.ifBlank { "Proxy handshake failed for ${server.name}" } }
-                        -1
-                    }
+                val merged = try {
+                    val ping = vpn.testLatency(server)
+                    val site = vpn.testSiteFetch(server)
+                    ping.mergeSiteFetch(site)
                 } catch (ce: kotlinx.coroutines.CancellationException) {
                     throw ce
                 } catch (_: Exception) {
-                    -1
+                    null
                 }
-                if (isActive) pings.update { it + (server.id to ping) }
+                if (isActive && merged != null) {
+                    val ping = if (merged.success) merged.pingMs else {
+                        probeError.update {
+                            merged.message.ifBlank { "Proxy handshake failed for ${server.name}" }
+                        }
+                        -1
+                    }
+                    pings.update { it + (server.id to ping) }
+                    merged.siteOk?.let { ok -> siteResults.update { it + (server.id to ok) } }
+                    if (merged.siteOk == false) {
+                        probeError.update {
+                            merged.siteMessage?.takeIf { it.isNotBlank() }
+                                ?: "Site fetch failed for ${server.name}"
+                        }
+                    }
+                }
             } finally {
                 if (singleTestJobs[server.id] === myJob) {
                     testing.update { it - server.id }

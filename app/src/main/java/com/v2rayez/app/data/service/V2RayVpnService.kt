@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.v2rayez.app.MainActivity
 import com.v2rayez.app.R
 import com.v2rayez.app.data.core.ClashConfigBuilder
@@ -36,6 +37,7 @@ import com.v2rayez.app.data.local.SessionEntity
 import com.v2rayez.app.data.local.SessionDao
 import com.v2rayez.app.domain.model.AppSettings
 import com.v2rayez.app.domain.model.CORE_VERSION_BUNDLED
+import com.v2rayez.app.domain.model.ConnectionStatus
 import com.v2rayez.app.domain.model.DesyncMode
 import com.v2rayez.app.domain.model.LogEntry
 import com.v2rayez.app.domain.model.LogLevel
@@ -71,6 +73,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
@@ -79,6 +82,44 @@ internal fun needsReconnectTeardown(
     anyEngineRunning: Boolean,
     tunPresent: Boolean
 ): Boolean = tunnelRunning || anyEngineRunning || tunPresent
+
+/** True when a new CONNECT targets the same server as an in-flight connect (null == null). */
+internal fun isSameConnectTarget(requestedId: String?, connectingId: String?): Boolean {
+    if (requestedId == null && connectingId == null) return true
+    return requestedId != null && requestedId == connectingId
+}
+
+/**
+ * Death-watchdog consecutive non-null [tunnelDeathReason] counter.
+ * Reset to 0 when healthy (null reason); otherwise increment.
+ */
+internal fun watchdogDeathStreak(previous: Int, deathReason: String?): Int =
+    if (deathReason == null) 0 else previous + 1
+
+internal fun watchdogShouldFail(streak: Int, threshold: Int = 3): Boolean = streak >= threshold
+
+/** One-shot auto-reconnect after engine flap — not TUN revoke / no-server / synthetic sessions. */
+internal fun shouldWatchdogAutoReconnect(reason: String, serverId: String?): Boolean {
+    if (serverId.isNullOrBlank()) return false
+    if (serverId == "tor-device" || serverId == "mitm") return false
+    val lower = reason.lowercase(Locale.US)
+    if (lower.contains("tunnel interface closed")) return false
+    if (lower.contains("no server") || reason.contains("سروری")) return false
+    return lower.contains("stopped unexpectedly") || lower.contains("tun bridge stopped")
+}
+
+internal fun looksLikeGeoFailure(reason: String): Boolean {
+    val lower = reason.lowercase(Locale.US)
+    return lower.contains("geosite") ||
+        lower.contains("geodata") ||
+        lower.contains("geoip") ||
+        lower.contains("illegal domain")
+}
+
+internal fun isPortInUseFailure(error: String?): Boolean {
+    val e = error.orEmpty().lowercase(Locale.US)
+    return e.contains("address already in use") || e.contains("10808")
+}
 
 internal data class TunnelHealthSnapshot(
     val tunPresent: Boolean = true,
@@ -168,6 +209,15 @@ class V2RayVpnService : VpnService() {
         private const val PING_INTERVAL_MS = 30_000L
         private const val WATCHDOG_INTERVAL_MS = 1_000L
         private const val TOR_READY_TIMEOUT_MS = 90_000L
+        private const val WATCHDOG_DEATH_THRESHOLD = 3
+        private const val AUTO_RECONNECT_DELAY_MS = 1_500L
+        /** Process-scoped: one auto-reconnect attempt until user disconnect. */
+        private val reconnectAttempted = AtomicBoolean(false)
+        /**
+         * When true, an async onDestroy worker must not call [stopCoresBlocking] — a watchdog
+         * reconnect is about to (or already did) start a new service that shares singleton cores.
+         */
+        private val skipAsyncCoreStop = AtomicBoolean(false)
     }
 
     @Inject lateinit var core: V2RayCore
@@ -229,16 +279,11 @@ class V2RayVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // This service is always launched via startForegroundService(), so Android REQUIRES a
-        // startForeground() call within ~5s on EVERY path (including failures / no-server /
-        // disconnect) or it crashes the app with ForegroundServiceDidNotStartInTimeException.
+        // This service is always launched via startForegroundService() for CONNECT, so Android
+        // REQUIRES a startForeground() call within ~5s on EVERY path (including failures /
+        // no-server / disconnect-via-FGS) or it crashes with ForegroundServiceDidNotStartInTimeException.
         // Post a placeholder notification synchronously here before any async work.
-        runCatching {
-            startForeground(
-                NOTIFICATION_ID,
-                buildNotification(activeServer, getString(R.string.vpn_notif_starting), getString(R.string.vpn_notif_preparing))
-            )
-        }.onFailure { Log.e(TAG, "startForeground failed", it) }
+        ensureForegroundStarted()
 
         when (intent?.action) {
             ACTION_DISCONNECT -> {
@@ -251,14 +296,55 @@ class V2RayVpnService : VpnService() {
             else -> {
                 // ACTION_CONNECT or always-on start (null intent) -> connect requested/last server.
                 val serverId = intent?.getStringExtra(EXTRA_SERVER_ID)
+                val state = stateHolder.connectionState.value
+                val connectingId = state.server?.id ?: activeServer?.id
+                if (state.status == ConnectionStatus.CONNECTING &&
+                    connectJob?.isActive == true &&
+                    isSameConnectTarget(serverId, connectingId)
+                ) {
+                    Log.i(TAG, "Ignoring duplicate CONNECT while already connecting")
+                    return START_STICKY
+                }
                 // Immediate CONNECTING UI for reconnect taps (per-app / SNI banners).
-                stateHolder.connectionState.value.server?.let { stateHolder.setConnecting(it) }
+                state.server?.let { stateHolder.setConnecting(it) }
                 connectJob?.cancel()
                 val gen = connectGeneration.incrementAndGet()
                 connectJob = scope.launch { startTunnel(serverId, gen) }
             }
         }
         return START_STICKY
+    }
+
+    /** Best-effort FG promotion; retry once if the first attempt fails (channel race / OEM quirks). */
+    private fun ensureForegroundStarted() {
+        fun promote(): Boolean = runCatching {
+            startForeground(
+                NOTIFICATION_ID,
+                buildNotification(
+                    activeServer,
+                    getString(R.string.vpn_notif_starting),
+                    getString(R.string.vpn_notif_preparing)
+                )
+            )
+            true
+        }.onFailure { Log.e(TAG, "startForeground failed", it) }.getOrDefault(false)
+
+        if (promote()) return
+        // Channel may not exist yet on cold start — create both channels then retry once.
+        runCatching {
+            createChannel(quiet = false)
+            createChannel(quiet = true)
+        }
+        if (!promote()) {
+            Log.e(TAG, "startForeground failed after retry — FGS deadline at risk")
+            runCatching {
+                firebaseTelemetry.addBreadcrumb(
+                    "vpn",
+                    "startForeground failed after retry",
+                    com.v2rayez.app.data.analytics.TelemetryLevel.ERROR
+                )
+            }
+        }
     }
 
     private suspend fun startTunnel(requestedId: String?, generation: Int) =
@@ -273,6 +359,18 @@ class V2RayVpnService : VpnService() {
         }
         try {
             if (generation != connectGeneration.get()) return
+            val connectState = stateHolder.connectionState.value
+            val connectingId = connectState.server?.id ?: activeServer?.id
+            val selfJob = currentCoroutineContext()[Job]
+            // Debounce: another in-flight connect for the same target (mutex double-entry).
+            if (connectState.status == ConnectionStatus.CONNECTING &&
+                isSameConnectTarget(requestedId, connectingId) &&
+                connectJob?.isActive == true &&
+                connectJob !== selfJob
+            ) {
+                log(LogLevel.INFO, "Connect already in progress for same server — skip duplicate")
+                return
+            }
             if (mitmProxyState.running.value) {
                 val message = "Standalone MITM proxy is running. Stop it before starting a VPN tunnel."
                 log(LogLevel.ERROR, message)
@@ -306,6 +404,7 @@ class V2RayVpnService : VpnService() {
             }
             val settings = settingsRepository.current().tunDnsEffectiveSettings()
             phase("settings")
+            runCatching { geoAssets.repairCorruptPackIfNeeded() }
             if (settings.enableLocalDns && !settingsRepository.current().enableLocalDns) {
                 log(LogLevel.INFO, "TUN DNS: forcing LocalDNS+sniff so apps resolve through Xray")
             }
@@ -577,7 +676,7 @@ class V2RayVpnService : VpnService() {
                     domainFrontRunning = domainFrontRunning,
                     geositeAvailable = geoAssets.geositeAvailable()
                 )
-                core.startLoop(config, tun.fd)
+                startCoreLoopWithPortRetry(config, tun.fd)
             } else {
                 startProcessCoreTunnel(server, settings, coreType, tun.fd)
             }
@@ -589,7 +688,7 @@ class V2RayVpnService : VpnService() {
             }
             val running = if (useXrayAar) started && core.isRunning else started
             if (!running) {
-                failAndStop(coreFailureMessage(getString(R.string.vpn_error_core)))
+                failAndStop(coreStartFailureMessage())
                 return
             }
             phase("core-running")
@@ -740,7 +839,7 @@ class V2RayVpnService : VpnService() {
             includeTun = true,
             geositeAvailable = geoAssets.geositeAvailable()
         )
-        val started = core.startLoop(config, tun.fd)
+        val started = startCoreLoopWithPortRetry(config, tun.fd)
 
         currentCoroutineContext().ensureActive()
         if (generation != connectGeneration.get()) {
@@ -749,7 +848,7 @@ class V2RayVpnService : VpnService() {
         }
         if (!started || !core.isRunning) {
             failAndStop(
-                coreFailureMessage(getString(R.string.vpn_error_core)),
+                coreStartFailureMessage(),
                 category = FailureCategory.MITM
             )
             return
@@ -882,7 +981,7 @@ class V2RayVpnService : VpnService() {
             includeTun = true,
             geositeAvailable = geoAssets.geositeAvailable()
         )
-        val started = core.startLoop(config, tun.fd)
+        val started = startCoreLoopWithPortRetry(config, tun.fd)
 
         currentCoroutineContext().ensureActive()
         if (generation != connectGeneration.get()) {
@@ -891,7 +990,7 @@ class V2RayVpnService : VpnService() {
         }
         if (!started || !core.isRunning) {
             failAndStop(
-                coreFailureMessage(getString(R.string.vpn_error_core)),
+                coreStartFailureMessage(),
                 stopTor = true,
                 category = FailureCategory.TOR
             )
@@ -1125,21 +1224,26 @@ class V2RayVpnService : VpnService() {
     /**
      * Clean up any partial tunnel state, surface [message] to the UI, and stop the service safely.
      * [needsCoreManager] flags a missing on-demand pack/core (sing-box, Psiphon, DNS tunnel,
-     * ByeDPI, …) so Home can render an "Open Core manager" CTA independent of the (possibly
-     * localized) message text.
+     * ByeDPI, …) or geo-data failure so Home can render an "Open Core manager" CTA independent
+     * of the (possibly localized) message text.
+     *
+     * [scheduleReconnectServerId]: when set (watchdog engine-flap), schedule one delayed CONNECT
+     * after teardown. Uses applicationContext so stopSelf()/onDestroy cannot cancel it.
      */
     private fun failAndStop(
         message: String,
         stopTor: Boolean = false,
         category: FailureCategory = FailureCategory.VPN_CONNECT,
-        needsCoreManager: Boolean = false
+        needsCoreManager: Boolean = false,
+        scheduleReconnectServerId: String? = null
     ) {
         log(LogLevel.ERROR, message)
         runCatching { firebaseTelemetry.captureVpnFailure(category, message) }
         // A watchdog failure can happen after a long valid session. Persist its final counters
         // before setError() resets the state-holder totals.
         runCatching { runBlocking { recordSession() } }
-        stateHolder.setError(message, needsCoreManager = needsCoreManager)
+        val geoCta = looksLikeGeoFailure(message)
+        stateHolder.setError(message, needsCoreManager = needsCoreManager || geoCta)
         statsJob?.cancel()
         statsJob = null
         pingJob?.cancel()
@@ -1165,7 +1269,32 @@ class V2RayVpnService : VpnService() {
         sessionStartMs = 0L
         stopForegroundCompat()
         firebaseTelemetry.logVpnState(connected = false)
+        val reconnectId = scheduleReconnectServerId
+            ?.takeIf { shouldWatchdogAutoReconnect(message, it) }
+            ?.takeIf { reconnectAttempted.compareAndSet(false, true) }
+        if (reconnectId != null) {
+            skipAsyncCoreStop.set(true)
+        }
         stopSelf()
+        if (reconnectId != null) {
+            scheduleOneShotReconnect(reconnectId)
+        }
+    }
+
+    private fun scheduleOneShotReconnect(serverId: String) {
+        val app = applicationContext
+        Thread({
+            try {
+                Thread.sleep(AUTO_RECONNECT_DELAY_MS)
+                val intent = Intent(app, V2RayVpnService::class.java)
+                    .setAction(ACTION_CONNECT)
+                    .putExtra(EXTRA_SERVER_ID, serverId)
+                ContextCompat.startForegroundService(app, intent)
+                Log.i(TAG, "Watchdog one-shot auto-reconnect launched")
+            } catch (t: Throwable) {
+                Log.w(TAG, "Watchdog auto-reconnect failed", t)
+            }
+        }, "vpn-watchdog-reconnect").apply { isDaemon = true }.start()
     }
 
     private fun establishTun(server: Server, settings: AppSettings): ParcelFileDescriptor? {
@@ -1317,6 +1446,30 @@ class V2RayVpnService : VpnService() {
     private fun coreFailureMessage(fallback: String): String =
         core.lastStartError()?.takeIf { it.isNotBlank() }?.let { "$fallback — $it" } ?: fallback
 
+    /**
+     * Start Xray after an explicit stop; on "address already in use" / 10808, stop + delay + retry once.
+     */
+    private suspend fun startCoreLoopWithPortRetry(configJson: String, tunFd: Int): Boolean {
+        core.stopLoopBlocking()
+        var started = core.startLoop(configJson, tunFd)
+        if (!started && isPortInUseFailure(core.lastStartError())) {
+            log(LogLevel.WARNING, "Local proxy port in use — stopping core and retrying once")
+            core.stopLoopBlocking()
+            delay(300)
+            started = core.startLoop(configJson, tunFd)
+        }
+        return started
+    }
+
+    private fun coreStartFailureMessage(): String {
+        val detail = core.lastStartError().orEmpty()
+        return if (isPortInUseFailure(detail)) {
+            "Local SOCKS port is already in use — close other proxy apps and retry"
+        } else {
+            coreFailureMessage(getString(R.string.vpn_error_core))
+        }
+    }
+
     private fun startStatsLoop(batterySaver: Boolean, generation: Int) {
         statsJob?.cancel()
         pingJob?.cancel()
@@ -1361,28 +1514,32 @@ class V2RayVpnService : VpnService() {
     private fun startDeathWatchdog(generation: Int) {
         watchdogJob?.cancel()
         watchdogJob = scope.launch {
+            var deathStreak = 0
             while (isActive && generation == connectGeneration.get()) {
                 delay(WATCHDOG_INTERVAL_MS)
                 if (generation != connectGeneration.get()) return@launch
                 lifecycleMutex.withLock {
                     if (generation != connectGeneration.get()) return@launch
-                    if (stateHolder.connectionState.value.status != com.v2rayez.app.domain.model.ConnectionStatus.CONNECTED) {
+                    if (stateHolder.connectionState.value.status != ConnectionStatus.CONNECTED) {
+                        deathStreak = 0
                         return@withLock
                     }
-                    val reason = tunnelDeathReason() ?: return@withLock
+                    val reason = tunnelDeathReason()
+                    deathStreak = watchdogDeathStreak(deathStreak, reason)
+                    if (reason == null || !watchdogShouldFail(deathStreak, WATCHDOG_DEATH_THRESHOLD)) {
+                        return@withLock
+                    }
                     if (generation != connectGeneration.get()) return@launch
                     val serverId = activeServer?.id
+                    val reconnectId = serverId?.takeIf { shouldWatchdogAutoReconnect(reason, it) }
                     failAndStop(
                         message = reason,
                         stopTor = serverId == "tor-device",
-                        category = when (serverId) {
-                            "tor-device" -> FailureCategory.TOR
-                            "mitm" -> FailureCategory.MITM
-                            else -> FailureCategory.VPN_CONNECT
-                        }
+                        category = FailureCategory.VPN_WATCHDOG,
+                        scheduleReconnectServerId = reconnectId
                     )
                 }
-                if (stateHolder.connectionState.value.status != com.v2rayez.app.domain.model.ConnectionStatus.CONNECTED) return@launch
+                if (stateHolder.connectionState.value.status != ConnectionStatus.CONNECTED) return@launch
             }
         }
     }
@@ -1432,6 +1589,9 @@ class V2RayVpnService : VpnService() {
         connectJob?.cancel()
         connectJob = null
         connectGeneration.incrementAndGet()
+        // User/system disconnect resets the one-shot watchdog reconnect budget.
+        reconnectAttempted.set(false)
+        skipAsyncCoreStop.set(false)
         scope.launch {
             lifecycleMutex.withLock {
                 stopTunnelInternal()
@@ -1535,29 +1695,46 @@ class V2RayVpnService : VpnService() {
         watchdogJob = null
         downloadTransport.setSocketProtector(null)
         downloadTransport.setProxyEndpointProvider(null)
-        runBlocking {
-            runCatching { pendingConnect?.join() }
-            runCatching {
-                recordSession()
-                stateHolder.setDisconnected()
-                firebaseTelemetry.logVpnState(connected = false)
-            }
-            runCatching { byedpi.stop() }
-            runCatching { domainFrontEngine.stop() }
-            torController.vpnSessionActive = false
-            val keepTor = runCatching { settingsRepository.current().tor.enabled }.getOrDefault(false)
-            if (!keepTor) {
-                runCatching { torController.stop() }
-            }
-        }
-        // The standalone MITM service owns the shared Xray instance. A rejected VPN start must
-        // not tear that healthy proxy down from this service's onDestroy().
-        if (!mitmProxyState.running.value) stopCoresBlocking()
-        usingProcessCore = false
-        activeXraySocksPort = 0
-        clearActiveRequirements()
+        // Close TUN immediately on the calling thread (cheap, must not leak).
         runCatching { tunInterface?.close() }
         tunInterface = null
+        // Crashlytics ANR: never runBlocking on the main thread in onDestroy. Offload
+        // session persistence + engine stops to a short-lived worker; do not join.
+        val keepMitmCore = mitmProxyState.running.value
+        val destroyGeneration = connectGeneration.get()
+        Thread({
+            runCatching {
+                runBlocking(Dispatchers.IO) {
+                    runCatching { pendingConnect?.join() }
+                    // If a newer CONNECT (e.g. watchdog auto-reconnect) already started,
+                    // do not wipe UI state or kill the new core from this stale destroy worker.
+                    if (destroyGeneration != connectGeneration.get() || skipAsyncCoreStop.get()) {
+                        Log.i(TAG, "onDestroy cleanup skipped — reconnect in flight or generation advanced")
+                        return@runBlocking
+                    }
+                    runCatching {
+                        recordSession()
+                        stateHolder.setDisconnected()
+                        firebaseTelemetry.logVpnState(connected = false)
+                    }
+                    runCatching { byedpi.stop() }
+                    runCatching { domainFrontEngine.stop() }
+                    torController.vpnSessionActive = false
+                    val keepTor = runCatching { settingsRepository.current().tor.enabled }.getOrDefault(false)
+                    if (!keepTor) {
+                        runCatching { torController.stop() }
+                    }
+                }
+            }.onFailure { Log.e(TAG, "onDestroy cleanup failed", it) }
+            if (destroyGeneration != connectGeneration.get()) return@Thread
+            // Skip core teardown when a watchdog reconnect is in flight — V2RayCore/ProcessProxyCore
+            // are process singletons and would kill the new tunnel.
+            val skipCores = skipAsyncCoreStop.getAndSet(false) || keepMitmCore
+            if (!skipCores) stopCoresBlocking()
+            usingProcessCore = false
+            activeXraySocksPort = 0
+            clearActiveRequirements()
+        }, "vpn-ondestroy").apply { isDaemon = true }.start()
         scope.cancel()
         super.onDestroy()
     }

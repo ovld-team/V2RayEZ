@@ -26,6 +26,7 @@ private class FakeServerRepository(
     override suspend fun getServer(id: String): Server? = null
     override suspend fun toggleFavorite(id: String) {}
     override suspend fun upsert(server: Server) {}
+    override suspend fun updatePing(id: String, pingMs: Int) {}
     override suspend fun delete(id: String) {}
     override suspend fun duplicate(id: String): Server? = null
     override suspend fun importFromText(text: String): ImportResult = ImportResult(false, 0)
@@ -49,6 +50,7 @@ private class FakeServerRepository(
     override suspend fun setFavoriteAll(ids: List<String>, favorite: Boolean) {}
     override suspend fun setCustomGroup(ids: List<String>, group: String?) {}
     override fun exportUri(server: Server): String = ""
+    override suspend fun exportUris(ids: List<String>): String = ""
 }
 
 class SubscriptionRefresherTest {

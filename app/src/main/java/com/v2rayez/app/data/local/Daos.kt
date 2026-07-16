@@ -9,11 +9,25 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ServerDao {
-    @Query("SELECT * FROM servers ORDER BY sortOrder ASC, name ASC")
-    fun observeAll(): Flow<List<ServerEntity>>
+    @Query(
+        """
+        SELECT id, name, country, countryCode, protocol, transport, security, sni, address,
+               pingMs, signal, `group`, isFavorite, host, port, uuid, password, method,
+               ssPlugin, ssPluginOptions, alterId, flow, network, headerType, path, requestHost,
+               streamSecurity, alpn, fingerprint, allowInsecure, publicKey, shortId, spiderX,
+               subscriptionId, frontProxyId, userModified, sortOrder, customGroup, preferredCore,
+               sshUser, wgLocalAddresses, wgAllowedIps, wgReserved, wgMtu,
+               dnsTunnelDomain, dnsTunnelPubKey, dnsTunnelResolver, dnsTunnelMode
+        FROM servers ORDER BY sortOrder ASC, name ASC
+        """
+    )
+    fun observeAll(): Flow<List<ServerListEntity>>
 
     @Query("SELECT * FROM servers ORDER BY sortOrder ASC, name ASC")
-    suspend fun getAll(): List<ServerEntity>
+    suspend fun getAllFull(): List<ServerEntity>
+
+    @Query("SELECT * FROM servers WHERE subscriptionId = :subId")
+    suspend fun getBySubscription(subId: String): List<ServerEntity>
 
     @Query("SELECT * FROM servers WHERE id = :id")
     suspend fun getById(id: String): ServerEntity?
@@ -35,6 +49,9 @@ interface ServerDao {
 
     @Query("UPDATE servers SET isFavorite = :fav WHERE id = :id")
     suspend fun setFavorite(id: String, fav: Boolean)
+
+    @Query("UPDATE servers SET pingMs = :pingMs WHERE id = :id")
+    suspend fun setPing(id: String, pingMs: Int)
 
     @Query("DELETE FROM servers WHERE id IN (:ids)")
     suspend fun deleteAll(ids: List<String>)

@@ -128,10 +128,12 @@ class ProcessProxyCore @Inject constructor(
         }, "core-log-${type.name}").apply { isDaemon = true }.start()
 
         try {
-            // Cancellable (unlike the old Thread.sleep(400)): if the connect attempt is
+            // Cancellable (unlike the old Thread.sleep): if the connect attempt is
             // superseded/cancelled mid-wait, we still land in the catch below and kill the
             // process we just spawned instead of leaking it as an orphaned PIE (W-07).
-            delay(400)
+            // 800ms gives slow devices / SELinux-wrapped PIE binaries time to settle before
+            // the early-exit health check (Crashlytics: process cores dying immediately).
+            delay(800)
         } catch (c: kotlinx.coroutines.CancellationException) {
             destroyQuietly(proc)
             if (processRef.compareAndSet(proc, null)) socksPort = 0
@@ -457,20 +459,39 @@ class CoreBinaryManager @Inject constructor(
             tmp.mkdirs()
             val archive = File(tmp, release.assetName)
             Log.i(TAG, "Downloading ${release.assetName} for ${deviceAbi.androidAbi} (mode=$mode)")
-            val outcome = downloadTransport.download(
-                release.downloadUrl,
-                archive,
-                mode = mode,
-                tag = downloadTag(type, release.tag)
-            )
-            val downloaded = outcome as? DownloadOutcome.Success
-                ?: error("download failed: ${(outcome as DownloadOutcome.Failed).error.message}")
+            val attemptModes = when (mode) {
+                DownloadMode.AUTO -> listOf(DownloadMode.AUTO, DownloadMode.THROUGH, DownloadMode.DIRECT)
+                DownloadMode.DIRECT -> listOf(DownloadMode.DIRECT, DownloadMode.THROUGH)
+                DownloadMode.THROUGH -> listOf(DownloadMode.THROUGH, DownloadMode.DIRECT)
+            }.distinct()
+            var downloadedFile: File? = null
+            var lastDlError: String? = null
+            for (attempt in attemptModes) {
+                val outcome = downloadTransport.download(
+                    release.downloadUrl,
+                    archive,
+                    mode = attempt,
+                    tag = downloadTag(type, release.tag)
+                )
+                when (outcome) {
+                    is DownloadOutcome.Success -> {
+                        downloadedFile = outcome.file
+                        break
+                    }
+                    is DownloadOutcome.Failed -> {
+                        lastDlError = outcome.error.message
+                        Log.w(TAG, "core download mode=$attempt failed: ${outcome.error.message}")
+                    }
+                }
+            }
+            val downloaded = downloadedFile
+                ?: error("download failed after ${attemptModes.size} modes: ${lastDlError ?: "unknown"}")
             if (release.sha256.isNullOrBlank()) {
                 // Upstream (sing-box/mihomo) publish per-asset .dgst sidecars we don't fetch yet;
                 // integrity then rests on GitHub HTTPS plus the ELF/ABI checks below.
                 Log.w(TAG, "No sha256 pinned for ${release.assetName} — installing on HTTPS+ELF trust only")
             }
-            require(NativeBinaryStore.verifySha256(downloaded.file, release.sha256)) {
+            require(NativeBinaryStore.verifySha256(downloaded, release.sha256)) {
                 "sha256 mismatch for ${release.assetName}"
             }
             val extracted = extractBinary(type, archive, tmp)

@@ -744,8 +744,22 @@ data class TestResult(
     val serverId: String,
     val pingMs: Int,
     val success: Boolean,
-    val message: String = ""
-)
+    val message: String = "",
+    /** HTTP site-fetch probe outcome (null = not run). */
+    val siteOk: Boolean? = null,
+    val siteMs: Int? = null,
+    val siteMessage: String? = null
+) {
+    /** Combine ping/handshake probe fields with a separate site-fetch probe. */
+    fun mergeSiteFetch(site: TestResult): TestResult = copy(
+        siteOk = site.success,
+        siteMs = site.siteMs ?: site.pingMs.takeIf { site.success && site.pingMs > 0 },
+        siteMessage = when {
+            !site.success -> site.siteMessage ?: site.message.takeIf { it.isNotBlank() }
+            else -> null
+        }
+    )
+}
 
 /** Outcome of importing a server / subscription. */
 data class ImportResult(
