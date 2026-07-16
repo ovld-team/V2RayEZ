@@ -3,7 +3,7 @@ package com.v2rayez.app.data.repository
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.core.ConfigBuilder
 import com.v2rayez.app.data.core.GeoAssetManager
 import com.v2rayez.app.data.core.ProcessProxyCore
@@ -44,7 +44,7 @@ class RealVpnController @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val serverRepository: ServerRepository,
     private val geoAssets: GeoAssetManager,
-    private val remoteTelemetry: RemoteTelemetry,
+    private val firebaseTelemetry: FirebaseTelemetry,
     private val logRepository: LogRepository
 ) : VpnController {
 
@@ -78,6 +78,7 @@ class RealVpnController @Inject constructor(
     }
 
     override suspend fun testLatency(server: Server): TestResult = withContext(Dispatchers.IO) {
+        firebaseTelemetry.traceSuspend("free_latency_test", mapOf("protocol" to server.protocol.name)) {
         val result = try {
             withTimeout(ACCURATE_TIMEOUT_MS) {
                 testLatencyInner(server)
@@ -93,9 +94,9 @@ class RealVpnController @Inject constructor(
             )
         }
         // Dead/slow public servers time out constantly — sampled at ~10% with a
-        // false_positive_candidate tag (see RemoteTelemetry) instead of alerting on every one.
+        // false_positive_candidate tag (see FirebaseTelemetry) instead of alerting on every one.
         if (!result.success && result.message == "Timed out") {
-            runCatching { remoteTelemetry.captureFreeTestTimeout(server.id) }
+            runCatching { firebaseTelemetry.captureFreeTestTimeout(server.id) }
             runCatching {
                 logRepository.logFree(
                     LogLevel.WARNING,
@@ -120,7 +121,10 @@ class RealVpnController @Inject constructor(
                 )
             }
         }
+        putAttribute("result", if (result.success) "success" else "failed")
+        if (result.success) putMetric("latency_ms", result.pingMs.toLong())
         result
+        }
     }
 
     private suspend fun testLatencyInner(server: Server): TestResult {

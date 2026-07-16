@@ -24,7 +24,6 @@ import com.v2rayez.app.data.core.SingBoxConfigBuilder
 import com.v2rayez.app.data.core.V2RayCore
 import com.v2rayez.app.data.analytics.FailureCategory
 import com.v2rayez.app.data.analytics.FirebaseTelemetry
-import com.v2rayez.app.data.analytics.RemoteTelemetry
 import com.v2rayez.app.data.cert.MitmCaStore
 import com.v2rayez.app.data.download.DownloadTransport
 import com.v2rayez.app.data.fronting.DomainFrontEngine
@@ -187,7 +186,6 @@ class V2RayVpnService : VpnService() {
     @Inject lateinit var sessionDao: SessionDao
     @Inject lateinit var downloadTransport: DownloadTransport
     @Inject lateinit var geoAssets: GeoAssetManager
-    @Inject lateinit var remoteTelemetry: RemoteTelemetry
     @Inject lateinit var firebaseTelemetry: FirebaseTelemetry
     @Inject lateinit var mitmProxyState: MitmProxyStateHolder
 
@@ -268,6 +266,7 @@ class V2RayVpnService : VpnService() {
 
     private suspend fun startTunnelLocked(requestedId: String?, generation: Int) {
         val connectStartedNs = System.nanoTime()
+        val connectTrace = firebaseTelemetry.startTrace("vpn_connect")
         fun phase(name: String) {
             val elapsedMs = (System.nanoTime() - connectStartedNs) / 1_000_000
             log(LogLevel.INFO, "Connect phase [$name] ${elapsedMs}ms")
@@ -277,7 +276,7 @@ class V2RayVpnService : VpnService() {
             if (mitmProxyState.running.value) {
                 val message = "Standalone MITM proxy is running. Stop it before starting a VPN tunnel."
                 log(LogLevel.ERROR, message)
-                runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.MITM, message) }
+                runCatching { firebaseTelemetry.captureVpnFailure(FailureCategory.MITM, message) }
                 stateHolder.setError(message)
                 stopForegroundCompat()
                 stopSelf()
@@ -641,16 +640,20 @@ class V2RayVpnService : VpnService() {
 
             sessionStartMs = System.currentTimeMillis()
             stateHolder.setConnected(server)
+            firebaseTelemetry.logVpnState(connected = true)
             reflectAlwaysOnState()
             settingsRepository.update { it.copy(lastServerId = server.id) }
             postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s ↓  0 B/s ↑")
             val ver = if (useXrayAar) core.coreVersion() else processCore.version()
             log(LogLevel.INFO, "Connected via ${coreType.label}. Core $ver")
             phase("connected")
+            connectTrace.putAttribute("result", "success")
+            connectTrace.putAttribute("core", coreType.name)
             startStatsLoop(settings.batterySaver, generation)
             startDeathWatchdog(generation)
         } catch (ce: CancellationException) {
             log(LogLevel.INFO, "Connect cancelled")
+            connectTrace.putAttribute("result", "cancelled")
             // Superseded by a newer connect (generation bumped): the winner tears down the old
             // core itself at its start; running stopTunnelInternal() here would rip the fresh
             // core / activeXraySocksPort out from under it. Explicit disconnect bumps the
@@ -658,7 +661,11 @@ class V2RayVpnService : VpnService() {
             if (generation == connectGeneration.get()) runCatching { stopTunnelInternal() }
             throw ce
         } catch (t: Throwable) {
+            connectTrace.putAttribute("result", "failed")
+            connectTrace.putAttribute("error_type", t.javaClass.simpleName)
             failAndStop(getString(R.string.vpn_error_generic, t.message ?: t.javaClass.simpleName))
+        } finally {
+            connectTrace.stop()
         }
     }
 
@@ -762,6 +769,7 @@ class V2RayVpnService : VpnService() {
 
         sessionStartMs = System.currentTimeMillis()
         stateHolder.setConnected(server)
+        firebaseTelemetry.logVpnState(connected = true)
         reflectAlwaysOnState()
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
         log(LogLevel.INFO, "Connected via MITM Domain Fronting. Core ${core.coreVersion()}")
@@ -907,6 +915,7 @@ class V2RayVpnService : VpnService() {
 
         sessionStartMs = System.currentTimeMillis()
         stateHolder.setConnected(server)
+        firebaseTelemetry.logVpnState(connected = true)
         reflectAlwaysOnState()
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
         log(LogLevel.INFO, "Connected via Tor full-device. Core ${core.coreVersion()}")
@@ -1063,6 +1072,7 @@ class V2RayVpnService : VpnService() {
         )
         sessionStartMs = System.currentTimeMillis()
         stateHolder.setConnected(server)
+        firebaseTelemetry.logVpnState(connected = true)
         reflectAlwaysOnState()
         settingsRepository.update { it.copy(lastServerId = server.id) }
         postNotification(server, getString(R.string.vpn_notif_connected), "0 B/s \u2193  0 B/s \u2191")
@@ -1109,6 +1119,7 @@ class V2RayVpnService : VpnService() {
         activeServer = null
         sessionStartMs = 0L
         stateHolder.setDisconnected()
+        firebaseTelemetry.logVpnState(connected = false)
     }
 
     /**
@@ -1124,13 +1135,7 @@ class V2RayVpnService : VpnService() {
         needsCoreManager: Boolean = false
     ) {
         log(LogLevel.ERROR, message)
-        runCatching { remoteTelemetry.captureVpnFailure(category, message) }
-        runCatching {
-            firebaseTelemetry.recordNonFatal(
-                category.tag,
-                IllegalStateException("[${category.tag}] $message")
-            )
-        }
+        runCatching { firebaseTelemetry.captureVpnFailure(category, message) }
         // A watchdog failure can happen after a long valid session. Persist its final counters
         // before setError() resets the state-holder totals.
         runCatching { runBlocking { recordSession() } }
@@ -1159,6 +1164,7 @@ class V2RayVpnService : VpnService() {
         activeServer = null
         sessionStartMs = 0L
         stopForegroundCompat()
+        firebaseTelemetry.logVpnState(connected = false)
         stopSelf()
     }
 
@@ -1303,7 +1309,7 @@ class V2RayVpnService : VpnService() {
                 val level = if (failure) LogLevel.ERROR else LogLevel.DEBUG
                 val text = "Xray status $code: $message"
                 logRepository.logCore(level, text)
-                remoteTelemetry.addLogBreadcrumb("core", level, text)
+                firebaseTelemetry.addLogBreadcrumb("core", level, text)
             }
         }
     }
@@ -1467,6 +1473,7 @@ class V2RayVpnService : VpnService() {
         tunInterface = null
         recordSession()
         stateHolder.setDisconnected()
+        firebaseTelemetry.logVpnState(connected = false)
         log(LogLevel.INFO, "Disconnected")
         stopForegroundCompat()
     }
@@ -1533,6 +1540,7 @@ class V2RayVpnService : VpnService() {
             runCatching {
                 recordSession()
                 stateHolder.setDisconnected()
+                firebaseTelemetry.logVpnState(connected = false)
             }
             runCatching { byedpi.stop() }
             runCatching { domainFrontEngine.stop() }
@@ -1633,6 +1641,6 @@ class V2RayVpnService : VpnService() {
 
     private fun log(level: LogLevel, message: String) {
         logRepository.logVpn(level, message)
-        remoteTelemetry.addLogBreadcrumb("vpn", level, message)
+        firebaseTelemetry.addLogBreadcrumb("vpn", level, message)
     }
 }

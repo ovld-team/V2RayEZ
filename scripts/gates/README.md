@@ -11,8 +11,8 @@
 | W1–W4 downloads | cancel/timeout; resolvers; no fat assets |
 | W6 strip | missing CTA; hev+AAR present |
 | U1/U2 motion | reduce-motion; no Lottie |
-| O12/O34 wizard | F1 wants; terms→Crashlytics |
-| FB1 Firebase | assemble; consent off; no PII |
+| O12/O34 wizard | F1 wants; terms→Firebase telemetry |
+| FB1 Firebase | assemble; always-on Crashlytics/Perf/Analytics; no PII |
 | B1/B2 Browser | MITM proxy; WebView destroy; tab kept |
 | L1/D1 | tags + honest diagnostics |
 | PG R8 | Hilt/JNI/Firebase keep |

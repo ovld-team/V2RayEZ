@@ -162,8 +162,7 @@ class DownloadTransport @Inject constructor(
             when (val outcome = download(url, tmp, mode = mode, tag = tag)) {
                 is DownloadOutcome.Success -> tmp.readText(Charsets.UTF_8)
                 is DownloadOutcome.Failed -> {
-                    // WARNING+ Logcat is forwarded to Sentry Logs; error.message embeds the URL,
-                    // so scrub before it ever reaches the buffer (14-P0-2).
+                    // error.message embeds the URL; scrub before it ever reaches Logcat.
                     Log.w(TAG, "downloadText failed: ${PiiScrubber.scrub(outcome.error.message ?: "")}")
                     null
                 }

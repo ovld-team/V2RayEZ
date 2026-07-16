@@ -1,6 +1,7 @@
 package com.v2rayez.app
 
 import com.v2rayez.app.data.analytics.LocalAnalyticsRing
+import com.v2rayez.app.data.analytics.PiiScrubber
 import com.v2rayez.app.data.analytics.sanitizedForCrashlytics
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,14 +21,20 @@ class FirebasePrivacyContractTest {
 
     @Test
     fun featureNamesAreSanitizedLikeTelemetry() {
+        // Mirrors FirebaseTelemetry.safeName: PiiScrubber then alnum/_ only.
         fun sanitize(feature: String) =
-            feature.takeWhile { it.isLetterOrDigit() || it == '_' }.take(24)
-        assertEquals("tor", sanitize("tor://evil"))
+            PiiScrubber.scrub(feature)
+                .map { if (it.isLetterOrDigit() || it == '_') it else '_' }
+                .joinToString("")
+                .trim('_')
+                .take(24)
+        assertEquals("uri", sanitize("tor://evil"))
+        assertFalse(sanitize("host.example.com:443").contains("example"))
         assertTrue(sanitize("host.example.com:443").none { it == '.' || it == ':' })
     }
 
-    // Crashlytics has no beforeSend hook — sanitizedForCrashlytics() is the only scrub boundary
-    // on that stream (14-P0-1). Mirrors SentryPrivacyTest's coverage of the Sentry side.
+    // Crashlytics has no beforeSend hook — sanitizedForCrashlytics() is the scrub boundary
+    // on that stream. PiiScrubberTest covers the shared remote telemetry scrubber.
 
     @Test
     fun scrubsHostFromExceptionMessage() {

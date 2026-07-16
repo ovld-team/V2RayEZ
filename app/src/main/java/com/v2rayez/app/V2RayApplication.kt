@@ -5,8 +5,10 @@ import android.content.Context
 import android.util.Log
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.v2rayez.app.data.analytics.sanitizedForCrashlytics
 import com.v2rayez.app.data.tor.TorController
 import com.v2rayez.app.data.tor.TorState
+import com.v2rayez.app.domain.model.AppSettings
 import com.v2rayez.app.data.work.SubscriptionRefreshWorker
 import com.v2rayez.app.domain.model.LogEntry
 import com.v2rayez.app.domain.model.LogLevel
@@ -34,7 +36,6 @@ class V2RayApplication : Application(), Configuration.Provider {
     @Inject lateinit var packInstallCoordinator: com.v2rayez.app.data.core.PackInstallCoordinator
 
     @Inject lateinit var firebaseTelemetry: com.v2rayez.app.data.analytics.FirebaseTelemetry
-    @Inject lateinit var remoteTelemetry: com.v2rayez.app.data.analytics.RemoteTelemetry
     @Inject lateinit var hiltWorkerFactory: HiltWorkerFactory
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -52,8 +53,7 @@ class V2RayApplication : Application(), Configuration.Provider {
         // Hilt injects fields inside super.onCreate() — must call first, then arm telemetry
         // so the rest of startup (and fatals) are covered.
         super.onCreate()
-        remoteTelemetry.init()
-        firebaseTelemetry.enableCrashReporting()
+        firebaseTelemetry.enableTelemetry()
         installCrashLogger()
         restoreTor()
         runCatching { SubscriptionRefreshWorker.schedule(this) }
@@ -62,9 +62,48 @@ class V2RayApplication : Application(), Configuration.Provider {
         packInstallCoordinator.start()
         appScope.launch {
             runCatching {
-                settingsRepository.settings().collect { firebaseTelemetry.applyConsent(it) }
+                var previous: AppSettings? = null
+                settingsRepository.settings().collect { settings ->
+                    firebaseTelemetry.applyConsent(settings)
+                    previous?.let { old -> logFeatureToggleChanges(old, settings) }
+                    previous = settings
+                }
             }
         }
+    }
+
+    private fun logFeatureToggleChanges(old: AppSettings, new: AppSettings) {
+        fun changed(name: String, before: Boolean, after: Boolean) {
+            if (before != after) firebaseTelemetry.logFeatureToggle(name, after)
+        }
+        changed("analytics", old.analyticsConsent, new.analyticsConsent)
+        changed("notifications", old.notifications, new.notifications)
+        changed("auto_connect", old.autoConnect, new.autoConnect)
+        changed("boot_auto_connect", old.bootAutoConnect, new.bootAutoConnect)
+        changed("battery_saver", old.batterySaver, new.batterySaver)
+        changed("always_on", old.vpnAlwaysOn, new.vpnAlwaysOn)
+        changed("lockdown", old.blockWithoutVpn, new.blockWithoutVpn)
+        changed("full_device_tunnel", old.fullDeviceTunnel, new.fullDeviceTunnel)
+        changed("allow_lan", old.allowLan, new.allowLan)
+        changed("ipv6", old.enableIpv6, new.enableIpv6)
+        changed("local_dns", old.enableLocalDns, new.enableLocalDns)
+        changed("sniffing", old.enableSniffing, new.enableSniffing)
+        changed("mux", old.enableMux, new.enableMux)
+        changed("lan_sharing", old.enableLanSharing, new.enableLanSharing)
+        changed("reduce_data", old.reduceData, new.reduceData)
+        changed("tor", old.tor.enabled, new.tor.enabled)
+        changed("tor_auto_rotate", old.tor.autoRotateBridges, new.tor.autoRotateBridges)
+        changed("domain_front", old.domainFront.enabled, new.domainFront.enabled)
+        changed("allow_insecure", old.tls.allowInsecure, new.tls.allowInsecure)
+        changed("fragment", old.fragment.enabled, new.fragment.enabled)
+        changed("warp", old.warp.enabled, new.warp.enabled)
+        changed("fake_dns", old.dns.enableFakeDns, new.dns.enableFakeDns)
+        changed("app_proxy", old.appProxy.enabled, new.appProxy.enabled)
+        changed("app_proxy_bypass", old.appProxy.bypassMode, new.appProxy.bypassMode)
+        changed("bypass_lan", old.routing.bypassLan, new.routing.bypassLan)
+        changed("bypass_mainland", old.routing.bypassMainland, new.routing.bypassMainland)
+        changed("bypass_iran", old.routing.bypassIran, new.routing.bypassIran)
+        changed("block_ads", old.routing.blockAds, new.routing.blockAds)
     }
 
     /**
@@ -103,10 +142,11 @@ class V2RayApplication : Application(), Configuration.Provider {
                     )
                 )
                 Log.e("V2RayApplication", "Uncaught exception on ${thread.name}", throwable)
-                remoteTelemetry.captureFatal(throwable)
                 firebaseTelemetry.recordFatal(throwable)
             }
-            previous?.uncaughtException(thread, throwable)
+            // Crashlytics' default handler is usually `previous` — never hand it a raw
+            // throwable (hosts/URIs in messages would bypass our scrub boundary).
+            previous?.uncaughtException(thread, sanitizedForCrashlytics(throwable))
         }
     }
 }

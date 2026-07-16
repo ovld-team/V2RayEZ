@@ -2,7 +2,7 @@ package com.v2rayez.app.data.core
 
 import android.content.Context
 import android.util.Log
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.download.DownloadOutcome
 import com.v2rayez.app.data.download.DownloadTransport
 import com.v2rayez.app.domain.model.DownloadMode
@@ -80,7 +80,7 @@ class AddonPackManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val coreBinaryManager: CoreBinaryManager,
     private val downloadTransport: DownloadTransport,
-    private val remoteTelemetry: RemoteTelemetry
+    private val firebaseTelemetry: FirebaseTelemetry
 ) {
     companion object {
         private const val TAG = "AddonPackManager"
@@ -276,6 +276,10 @@ class AddonPackManager @Inject constructor(
         release: AddonRelease,
         mode: DownloadMode = DownloadMode.AUTO
     ): AddonInstallResult = withContext(Dispatchers.IO) {
+        firebaseTelemetry.traceSuspend(
+            "addon_install",
+            mapOf("pack" to release.packId.name, "mode" to mode.name)
+        ) {
         val packId = release.packId
         val work = File(context.cacheDir, "addon-dl-${packId.name}-${release.version}-${deviceAbi.goArch}")
         runCatching {
@@ -315,11 +319,12 @@ class AddonPackManager @Inject constructor(
         }.getOrElse {
             Log.e(TAG, "install failed for ${packId.label}", it)
             val reason = it.message ?: "unknown error"
-            runCatching { remoteTelemetry.captureDownloadFailure(packId.name, reason) }
+            runCatching { firebaseTelemetry.captureDownloadFailure(packId.name, reason) }
             AddonInstallResult.Failed(packId, reason)
         }.also {
             // Archive + extracted binary are tens of MB per install — never leave them in cache.
             runCatching { work.deleteRecursively() }
+        }
         }
     }
 

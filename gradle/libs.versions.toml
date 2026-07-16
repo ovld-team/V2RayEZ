@@ -26,9 +26,8 @@ espressoCore = "3.6.1"
 bouncycastle = "1.85"
 googleServices = "4.5.0"
 firebaseCrashlyticsPlugin = "3.0.7"
+firebasePerfPlugin = "2.0.2"
 firebaseBom = "33.16.0"
-sentry = "8.48.0"
-sentryGradlePlugin = "6.14.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -81,14 +80,11 @@ coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coi
 bouncycastle-bcpkix = { group = "org.bouncycastle", name = "bcpkix-jdk18on", version.ref = "bouncycastle" }
 bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 
-# Firebase light: Crashlytics + Analytics ONLY (no heavy products — no Auth/Firestore/etc.)
+# Firebase DevOps telemetry: Crashlytics + Analytics + Performance (no Auth/Firestore/etc.)
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
-
-# Sentry (PRIMARY error/crash telemetry — Crashlytics above stays the fatal-only backup).
-# NDK artifact is excluded in app/build.gradle.kts (Android 8.x cold-start safety).
-sentry-android = { group = "io.sentry", name = "sentry-android", version.ref = "sentry" }
+firebase-perf = { group = "com.google.firebase", name = "firebase-perf" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
@@ -99,4 +95,4 @@ ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 firebase-crashlytics-plugin = { id = "com.google.firebase.crashlytics", version.ref = "firebaseCrashlyticsPlugin" }
-sentry-android-gradle = { id = "io.sentry.android.gradle", version.ref = "sentryGradlePlugin" }
+firebase-perf-plugin = { id = "com.google.firebase.firebase-perf", version.ref = "firebasePerfPlugin" }

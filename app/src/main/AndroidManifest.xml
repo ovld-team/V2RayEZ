@@ -25,33 +25,19 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.V2RayEz">
 
-        <!-- Manual SentryAndroid.init only (blank DSN must never crash via ContentProvider). -->
-        <meta-data
-            android:name="io.sentry.auto-init"
-            android:value="false" />
-        <!-- Structured Logs (also set in RemoteTelemetry options.logs.isEnabled). -->
-        <meta-data
-            android:name="io.sentry.logs.enabled"
-            android:value="true" />
-        <provider
-            android:name="io.sentry.android.core.SentryInitProvider"
-            android:authorities="${applicationId}.SentryInitProvider"
-            tools:node="remove" />
-        <provider
-            android:name="io.sentry.android.core.SentryPerformanceProvider"
-            android:authorities="${applicationId}.SentryPerformanceProvider"
-            tools:node="remove" />
-
         <!--
-          Crashlytics fatals are always on. Analytics stays off until the user opts in
-          (FirebaseTelemetry.applyConsent).
+          Firebase telemetry is always on for DevOps visibility. Never attach raw hosts,
+          proxy URIs, bridge lines, IPs, PEMs, or subscription bodies.
         -->
         <meta-data
             android:name="firebase_crashlytics_collection_enabled"
             android:value="true" />
         <meta-data
             android:name="firebase_analytics_collection_enabled"
-            android:value="false" />
+            android:value="true" />
+        <meta-data
+            android:name="firebase_performance_collection_enabled"
+            android:value="true" />
         <meta-data
             android:name="google_analytics_default_allow_ad_personalization_signals"
             android:value="false" />

@@ -13,7 +13,7 @@ import androidx.core.app.NotificationCompat
 import com.v2rayez.app.MainActivity
 import com.v2rayez.app.R
 import com.v2rayez.app.data.analytics.FailureCategory
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.cert.MitmCaStore
 import com.v2rayez.app.data.core.GeoAssetManager
 import com.v2rayez.app.data.core.V2RayCore
@@ -45,7 +45,7 @@ class MitmProxyService : Service() {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var stateHolder: MitmProxyStateHolder
     @Inject lateinit var geoAssets: GeoAssetManager
-    @Inject lateinit var remoteTelemetry: RemoteTelemetry
+    @Inject lateinit var firebaseTelemetry: FirebaseTelemetry
     @Inject lateinit var logRepository: LogRepository
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -75,10 +75,11 @@ class MitmProxyService : Service() {
     }
 
     private suspend fun startProxy() {
+        val trace = firebaseTelemetry.startTrace("mitm_start", mapOf("mode" to "standalone"))
         try {
             val settings = settingsRepository.current()
             val mitm = settings.mitm
-            if (!MitmCaStore.isPresent(this) || !mitm.caInstallAcknowledged) {
+            if (!MitmCaStore.isPresent(this@MitmProxyService) || !mitm.caInstallAcknowledged) {
                 fail(getString(R.string.vpn_error_mitm_ca))
                 return
             }
@@ -92,8 +93,8 @@ class MitmProxyService : Service() {
                 return
             }
 
-            val certPath = MitmCaStore.crtFile(this).absolutePath
-            val keyPath = MitmCaStore.keyFile(this).absolutePath
+            val certPath = MitmCaStore.crtFile(this@MitmProxyService).absolutePath
+            val keyPath = MitmCaStore.keyFile(this@MitmProxyService).absolutePath
             val config = MitmConfigBuilder.build(
                 mitm,
                 certPath,
@@ -144,9 +145,14 @@ class MitmProxyService : Service() {
                 )
             }
             Log.i(TAG, "MITM proxy listening socks=${mitm.proxyPort} http=${mitm.httpPort}")
+            trace.putAttribute("result", "success")
         } catch (t: Throwable) {
+            trace.putAttribute("result", "failed")
+            trace.putAttribute("error_type", t.javaClass.simpleName)
             Log.e(TAG, "startProxy failed", t)
             fail(t.message ?: t.javaClass.simpleName)
+        } finally {
+            trace.stop()
         }
     }
 
@@ -160,7 +166,7 @@ class MitmProxyService : Service() {
     }
 
     private suspend fun fail(message: String) {
-        runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.MITM, message) }
+        runCatching { firebaseTelemetry.captureVpnFailure(FailureCategory.MITM, message) }
         runCatching { logMitm(LogLevel.ERROR, message) }
         stateHolder.setError(message)
         stateHolder.setRunning(false)
@@ -171,7 +177,7 @@ class MitmProxyService : Service() {
 
     private fun logMitm(level: LogLevel, message: String, detail: String? = null) {
         logRepository.logMitm(level, message, detail)
-        remoteTelemetry.addLogBreadcrumb("mitm", level, message)
+        firebaseTelemetry.addLogBreadcrumb("mitm", level, message)
     }
 
     private fun portAccepts(port: Int, timeoutMs: Int = 1_500): Boolean {

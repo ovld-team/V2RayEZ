@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import com.v2rayez.app.data.analytics.FailureCategory
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.download.DownloadOutcome
 import com.v2rayez.app.data.download.DownloadTransport
 import com.v2rayez.app.domain.model.CORE_VERSION_BUNDLED
@@ -32,7 +32,7 @@ import javax.inject.Singleton
 class ProcessProxyCore @Inject constructor(
     @ApplicationContext private val context: Context,
     private val binaryManager: CoreBinaryManager,
-    private val remoteTelemetry: RemoteTelemetry
+    private val firebaseTelemetry: FirebaseTelemetry
 ) : ProxyCore {
 
     companion object {
@@ -83,7 +83,7 @@ class ProcessProxyCore @Inject constructor(
         val binary = binaryManager.resolveBinary(type, selectedVersion) ?: run {
             val reason = "No binary for ${type.label} abi=${binaryManager.deviceAbiLabel()}"
             Log.e(TAG, reason)
-            runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.VPN_CONNECT, reason) }
+            runCatching { firebaseTelemetry.captureVpnFailure(FailureCategory.VPN_CONNECT, reason) }
             return@withContext false
         }
         lastVersion = selectedVersion.ifBlank { CORE_VERSION_BUNDLED }
@@ -105,7 +105,7 @@ class ProcessProxyCore @Inject constructor(
         val proc = runCatching { pb.start() }.onFailure {
             Log.e(TAG, "Failed to start process", it)
             runCatching {
-                remoteTelemetry.captureVpnFailure(
+                firebaseTelemetry.captureVpnFailure(
                     FailureCategory.VPN_CONNECT,
                     "${type.label} process start failed: ${it.javaClass.simpleName}"
                 )
@@ -142,7 +142,7 @@ class ProcessProxyCore @Inject constructor(
             Log.e(TAG, reason)
             processRef.set(null)
             socksPort = 0
-            runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.VPN_CONNECT, reason) }
+            runCatching { firebaseTelemetry.captureVpnFailure(FailureCategory.VPN_CONNECT, reason) }
             return@withContext false
         }
         true

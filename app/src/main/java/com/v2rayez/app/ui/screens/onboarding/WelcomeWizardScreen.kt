@@ -177,8 +177,7 @@ fun WelcomeWizardScreen(
                     3 -> NotificationsPage()
                     4 -> WantsPage(
                         wants = settings.onboardingWants,
-                        analytics = settings.analyticsConsent,
-                        onChange = { w, a -> viewModel.setWants(w, a) }
+                        onChange = { w -> viewModel.setWants(w, analytics = true) }
                     )
                     else -> ReadyPage()
                 }
@@ -574,8 +573,7 @@ private data class WantFeature(
 @Composable
 private fun WantsPage(
     wants: OnboardingWants,
-    analytics: Boolean,
-    onChange: (OnboardingWants, Boolean) -> Unit
+    onChange: (OnboardingWants) -> Unit
 ) {
     val features = listOf(
         WantFeature(
@@ -584,7 +582,7 @@ private fun WantsPage(
             title = stringResource(R.string.wizard_want_tor),
             description = stringResource(R.string.wizard_want_tor_desc),
             checked = wants.tor,
-            onToggle = { onChange(wants.copy(tor = it), analytics) }
+            onToggle = { onChange(wants.copy(tor = it)) }
         ),
         WantFeature(
             icon = Icons.Filled.SwapHoriz,
@@ -592,7 +590,7 @@ private fun WantsPage(
             title = stringResource(R.string.wizard_want_mitm),
             description = stringResource(R.string.wizard_want_mitm_desc),
             checked = wants.mitm,
-            onToggle = { onChange(wants.copy(mitm = it), analytics) }
+            onToggle = { onChange(wants.copy(mitm = it)) }
         ),
         WantFeature(
             icon = Icons.Filled.Speed,
@@ -600,7 +598,7 @@ private fun WantsPage(
             title = stringResource(R.string.wizard_want_dpi),
             description = stringResource(R.string.wizard_want_dpi_desc),
             checked = wants.dpiBypass,
-            onToggle = { onChange(wants.copy(dpiBypass = it), analytics) }
+            onToggle = { onChange(wants.copy(dpiBypass = it)) }
         ),
         WantFeature(
             icon = Icons.Filled.Wifi,
@@ -608,7 +606,7 @@ private fun WantsPage(
             title = stringResource(R.string.wizard_want_hotspot),
             description = stringResource(R.string.wizard_want_hotspot_desc),
             checked = wants.hotspot,
-            onToggle = { onChange(wants.copy(hotspot = it), analytics) }
+            onToggle = { onChange(wants.copy(hotspot = it)) }
         ),
         WantFeature(
             icon = Icons.Filled.Memory,
@@ -616,7 +614,7 @@ private fun WantsPage(
             title = stringResource(R.string.wizard_want_cores),
             description = stringResource(R.string.wizard_want_cores_desc),
             checked = wants.processCores,
-            onToggle = { onChange(wants.copy(processCores = it), analytics) }
+            onToggle = { onChange(wants.copy(processCores = it)) }
         )
     )
     val selectedCount = features.count { it.checked }
@@ -658,10 +656,7 @@ private fun WantsPage(
             if (index != features.lastIndex) VSpacer(10)
         }
         VSpacer(18)
-        AnalyticsOptInCard(
-            checked = analytics,
-            onCheckedChange = { onChange(wants.copy(analytics = it), it) }
-        )
+        AnalyticsNoticeCard()
         VSpacer(4)
     }
 }
@@ -731,9 +726,9 @@ private fun FeatureSelectCard(feature: WantFeature) {
     }
 }
 
-/** Lower-emphasis opt-in row for anonymous analytics — visually distinct from the feature list. */
+/** Always-on anonymous diagnostics notice — collection is not optional (policy 2B). */
 @Composable
-private fun AnalyticsOptInCard(checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun AnalyticsNoticeCard() {
     CardSurface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
@@ -743,7 +738,6 @@ private fun AnalyticsOptInCard(checked: Boolean, onCheckedChange: (Boolean) -> U
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable(onClick = { onCheckedChange(!checked) })
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -755,38 +749,21 @@ private fun AnalyticsOptInCard(checked: Boolean, onCheckedChange: (Boolean) -> U
             )
             Spacer(modifier = Modifier.size(10.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stringResource(R.string.wizard_want_analytics),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.size(6.dp))
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.14f))
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.wizard_wants_optional_label),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                Text(
+                    text = stringResource(R.string.wizard_want_analytics),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
                 VSpacer(2)
                 Text(
                     text = stringResource(R.string.wizard_want_analytics_desc),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(modifier = Modifier.size(10.dp))
-            V2Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
     }
 }

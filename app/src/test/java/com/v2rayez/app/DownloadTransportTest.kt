@@ -163,22 +163,24 @@ class DownloadTransportTest {
 
     @Test
     fun unreachablePortMapsToTypedFailure(): Unit = runBlocking {
-        // Bind + immediately close to get a port nothing is listening on.
-        val probe = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
-        val deadPort = probe.localPort
-        probe.close()
-
+        // Real closed-port / NXDOMAIN I/O can hang past OkHttp timeouts on some hosts.
+        // Force ConnectException via interceptor so we still exercise download() → typed Failed.
         val dir = createTempDirectory("dlt-unreachable").toFile()
         val dest = java.io.File(dir, "out.bin")
-        val transport = transport()
+        val client = OkHttpClient.Builder()
+            .addInterceptor { throw ConnectException("Connection refused") }
+            .build()
+        val transport = DownloadTransport(client)
         val outcome = transport.download(
-            "http://127.0.0.1:$deadPort/pack.bin",
+            "http://127.0.0.1:1/pack.bin",
             dest,
             mode = DownloadMode.DIRECT,
             maxAttemptsPerKind = 1,
-            connectTimeoutMs = 2_000
+            connectTimeoutMs = 500,
+            readTimeoutMs = 500
         )
         assertTrue(outcome is DownloadOutcome.Failed)
+        assertTrue((outcome as DownloadOutcome.Failed).error is DownloadError.Unreachable)
         assertFalse(dest.exists())
         dir.deleteRecursively()
     }

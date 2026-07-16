@@ -16,8 +16,7 @@ import javax.inject.Singleton
 
 sealed class BugReportResult {
     data class Completed(
-        val sentry: SentryBugReportStatus,
-        val firebaseSent: Boolean
+        val firebase: BugReportStatus
     ) : BugReportResult()
     data class Failed(val reason: String) : BugReportResult()
 }
@@ -29,7 +28,7 @@ interface BugReporter {
 
 /**
  * Collects recent in-app logs + a short diagnostics snapshot, scrubs via [PiiScrubber], and
- * sends a non-fatal report to Sentry (primary) and Crashlytics (backup).
+ * sends a non-fatal report to Firebase Crashlytics.
  */
 @Singleton
 class BugReportSender @Inject constructor(
@@ -37,7 +36,6 @@ class BugReportSender @Inject constructor(
     private val logs: LogRepository,
     private val settings: SettingsRepository,
     private val vpn: VpnController,
-    private val remoteTelemetry: RemoteTelemetry,
     private val firebaseTelemetry: FirebaseTelemetry
 ) : BugReporter {
     override suspend fun send(userNote: String?): BugReportResult {
@@ -45,10 +43,9 @@ class BugReportSender @Inject constructor(
             val entries = logs.logs().first().takeLast(120)
             val snap = buildSnapshot(settings.current(), vpn.connectionState.value, entries, userNote)
             val scrubbed = PiiScrubber.scrub(snap)
-            val sentry = remoteTelemetry.captureBugReport(scrubbed)
-            val firebaseSent = firebaseTelemetry.recordBugReport(scrubbed)
+            val firebase = firebaseTelemetry.captureBugReport(scrubbed)
             context.packageName // keep ApplicationContext used (lint-safe)
-            BugReportResult.Completed(sentry, firebaseSent)
+            BugReportResult.Completed(firebase)
         }.getOrElse {
             BugReportResult.Failed(it.message ?: "unknown")
         }
@@ -84,6 +81,6 @@ class BugReportSender @Inject constructor(
 /** Preview / no-arg ViewModel stub. */
 class MockBugReporter : BugReporter {
     override suspend fun send(userNote: String?): BugReportResult =
-        BugReportResult.Completed(SentryBugReportStatus.Sent("preview"), firebaseSent = true)
+        BugReportResult.Completed(BugReportStatus.Sent)
 }
 

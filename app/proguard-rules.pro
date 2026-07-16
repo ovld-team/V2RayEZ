@@ -5,16 +5,13 @@
 -dontobfuscate
 -dontoptimize
 
-# --- Firebase Crashlytics / Analytics: keep lightly (no full-package -keep needed with -dontobfuscate,
+# --- Firebase Crashlytics / Analytics / Performance: keep lightly (no full-package -keep needed with -dontobfuscate,
 # but pin down the reflective bits so a future re-enable of obfuscation stays safe) ---
 -keep class com.google.firebase.crashlytics.** { *; }
 -keep class com.google.firebase.analytics.** { *; }
+-keep class com.google.firebase.perf.** { *; }
 -keepattributes SourceFile,LineNumberTable
 -dontwarn com.google.firebase.**
-
-# --- Sentry ---
--keep class io.sentry.** { *; }
--dontwarn io.sentry.**
 
 # --- Vendored Xray core (gomobile / JNI) ---
 -keep class libv2ray.** { *; }

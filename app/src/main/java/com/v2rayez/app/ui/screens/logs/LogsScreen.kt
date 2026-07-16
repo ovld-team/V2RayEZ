@@ -157,17 +157,10 @@ fun LogsScreen(onBack: () -> Unit, viewModel: LogsViewModel = hiltViewModel()) {
 
 private fun bugReportToastText(context: android.content.Context, status: String): String {
     if (status == "report_failed") return context.getString(R.string.report_bug_fail)
-    val firebase = if (status.endsWith(":firebase_ok")) {
-        context.getString(R.string.report_bug_firebase_ok)
-    } else {
-        context.getString(R.string.report_bug_firebase_failed)
+    return when (status) {
+        "firebase_ok" -> context.getString(R.string.report_bug_firebase_ok)
+        else -> context.getString(R.string.report_bug_firebase_failed)
     }
-    val message = when {
-        status.startsWith("sentry_ok:") -> R.string.report_bug_sentry_ok
-        status.startsWith("sentry_dsn_missing:") -> R.string.report_bug_sentry_dsn_missing
-        else -> R.string.report_bug_sentry_failed
-    }
-    return context.getString(message, firebase)
 }
 
 private fun shareLogFile(context: android.content.Context, file: java.io.File) {

@@ -2,7 +2,7 @@ package com.v2rayez.app.data.core
 
 import android.content.Context
 import com.v2rayez.app.R
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.download.DownloadPhase
 import com.v2rayez.app.data.download.DownloadProgress
 import com.v2rayez.app.data.download.DownloadTransport
@@ -46,7 +46,7 @@ class PackInstallCoordinator @Inject constructor(
     private val vpn: VpnController,
     private val downloadTransport: DownloadTransport,
     private val logs: LogRepository,
-    private val remoteTelemetry: RemoteTelemetry,
+    private val firebaseTelemetry: FirebaseTelemetry,
     @ApplicationContext private val appContext: Context
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -54,7 +54,7 @@ class PackInstallCoordinator @Inject constructor(
     private fun str(resId: Int, vararg args: Any): String = appContext.getString(resId, *args)
     private fun logCore(level: LogLevel, message: String) {
         logs.logCore(level, message)
-        remoteTelemetry.addLogBreadcrumb("core_manager", level, message)
+        firebaseTelemetry.addLogBreadcrumb("core_manager", level, message)
     }
 
     private fun downloadFailHint(): String =

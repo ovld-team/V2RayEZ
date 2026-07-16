@@ -20,8 +20,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -63,6 +65,11 @@ import com.v2rayez.app.ui.screens.tools.SniTunnelScreen
 import com.v2rayez.app.ui.screens.tools.SpeedTestScreen
 import com.v2rayez.app.ui.screens.tools.ToolsScreen
 import com.v2rayez.app.ui.screens.tools.TorScreen
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 
 @Composable
 fun V2RayApp(
@@ -70,9 +77,20 @@ fun V2RayApp(
     onInitialRouteConsumed: () -> Unit = {}
 ) {
     val navController = rememberNavController()
+    val appContext = LocalContext.current.applicationContext
+    val firebaseTelemetry = remember(appContext) {
+        EntryPointAccessors.fromApplication(
+            appContext,
+            FirebaseTelemetryEntryPoint::class.java
+        ).firebaseTelemetry()
+    }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val bottomDestination = BottomDestination.fromRoute(currentRoute)
+
+    LaunchedEffect(currentRoute) {
+        currentRoute?.let { firebaseTelemetry.logScreen(it) }
+    }
 
     // Single-top navigation for all detail screens: guards against rapid double-taps
     // pushing duplicate copies of the same destination onto the back stack.
@@ -274,4 +292,10 @@ fun V2RayApp(
         }
         }
     }
+}
+
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+private interface FirebaseTelemetryEntryPoint {
+    fun firebaseTelemetry(): FirebaseTelemetry
 }

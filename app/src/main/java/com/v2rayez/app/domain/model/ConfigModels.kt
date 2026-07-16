@@ -180,7 +180,7 @@ data class OnboardingWants(
     val hotspot: Boolean = false,
     /** Queue sing-box + Mihomo/Clash Meta core downloads. */
     val processCores: Boolean = false,
-    /** Opt-in anonymous analytics ([AppSettings.analyticsConsent]). */
+    /** Compatibility flag; Firebase diagnostics are always-on ([AppSettings.analyticsConsent]). */
     val analytics: Boolean = false
 )
 
@@ -629,7 +629,7 @@ data class AppSettings(
      * toggle [RoutingConfig.bypassIran] freely afterwards without it being re-applied.
      */
     val iranBypassAutoApplied: Boolean = false,
-    /** Opt-in Firebase Analytics. Crashlytics fatals are always-on (v0.9.71). */
+    /** Kept for settings schema compatibility; Firebase collection is always-on (v1.0.1). */
     val analyticsConsent: Boolean = false,
     /** Retained for settings decode compatibility; Crashlytics fatals ignore this flag. */
     val crashlyticsConsent: Boolean = true,

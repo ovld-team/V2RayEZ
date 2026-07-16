@@ -42,19 +42,13 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Assemble debug
-        env:
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-        run: ./gradlew assembleDebug --stacktrace -Psentry.dsn="$SENTRY_DSN"
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Unit tests
-        env:
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-        run: ./gradlew testDebugUnitTest --stacktrace -Psentry.dsn="$SENTRY_DSN"
+        run: ./gradlew testDebugUnitTest --stacktrace
 
       - name: Lint
-        env:
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-        run: ./gradlew lintDebug --stacktrace -Psentry.dsn="$SENTRY_DSN"
+        run: ./gradlew lintDebug --stacktrace
 
   release:
     name: Signed release + GitHub assets
@@ -109,11 +103,8 @@ jobs:
           echo "apk=V2RayEZ-v${VER}-release.apk" >> "$GITHUB_OUTPUT"
 
       - name: Assemble release
-        env:
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         run: |
           ./gradlew assembleRelease --stacktrace \
-            -Psentry.dsn="$SENTRY_DSN" \
             -Pv2rayez.addons.githubRepo="${{ env.ADDONS_REPO }}" \
             -Pv2rayez.addons.releaseTag="${{ steps.ver.outputs.tag }}"
 

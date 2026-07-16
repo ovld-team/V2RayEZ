@@ -3,7 +3,7 @@ package com.v2rayez.app.data.core
 import android.content.Context
 import android.util.Log
 import com.v2rayez.app.data.analytics.PiiScrubber
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.download.DownloadOutcome
 import com.v2rayez.app.data.download.DownloadTransport
 import com.v2rayez.app.domain.model.DownloadMode
@@ -43,7 +43,7 @@ sealed class GeoInstallResult {
 class GeoAssetManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val downloadTransport: DownloadTransport,
-    private val remoteTelemetry: RemoteTelemetry
+    private val firebaseTelemetry: FirebaseTelemetry
 ) {
     companion object {
         private const val TAG = "GeoAssetManager"
@@ -94,18 +94,20 @@ class GeoAssetManager @Inject constructor(
      * core never sees a half-written database.
      */
     suspend fun download(mode: DownloadMode = DownloadMode.AUTO): GeoInstallResult =
-        downloadMutex.withLock { withContext(Dispatchers.IO) {
+        downloadMutex.withLock {
+            firebaseTelemetry.traceSuspend("geo_download", mapOf("mode" to mode.name)) {
+                withContext(Dispatchers.IO) {
             val geoip = when (val r = fetchOne(GEOIP, MIN_GEOIP_BYTES, mode)) {
                 is FetchResult.Ok -> r.bytes
                 is FetchResult.Error -> {
-                    runCatching { remoteTelemetry.captureDownloadFailure(GEOIP, r.reason) }
+                    runCatching { firebaseTelemetry.captureDownloadFailure(GEOIP, r.reason) }
                     return@withContext GeoInstallResult.Failed("$GEOIP — ${r.reason}")
                 }
             }
             val geosite = when (val r = fetchOne(GEOSITE, MIN_GEOSITE_BYTES, mode)) {
                 is FetchResult.Ok -> r.bytes
                 is FetchResult.Error -> {
-                    runCatching { remoteTelemetry.captureDownloadFailure(GEOSITE, r.reason) }
+                    runCatching { firebaseTelemetry.captureDownloadFailure(GEOSITE, r.reason) }
                     return@withContext GeoInstallResult.Failed("$GEOSITE — ${r.reason}")
                 }
             }
@@ -116,7 +118,9 @@ class GeoAssetManager @Inject constructor(
                 )
             }
             GeoInstallResult.Success(geoip, geosite)
-        } }
+                }
+            }
+        }
 
     /** Remove the full databases; [V2RayCore] restores the mini geoip on next init. */
     fun delete() {
@@ -140,9 +144,8 @@ class GeoAssetManager @Inject constructor(
         val bytes = when (outcome) {
             is DownloadOutcome.Success -> outcome.bytes
             is DownloadOutcome.Failed -> {
-                // error.message embeds the download URL; scrub before WARNING+ Logcat forwards
-                // it to Sentry Logs (14-P0-2). The unscrubbed reason still flows into
-                // captureDownloadFailure() above, which scrubs it again at the Sentry boundary.
+                // error.message embeds the download URL; scrub before it reaches Logcat or
+                // Firebase telemetry. captureDownloadFailure() scrubs again at the remote boundary.
                 Log.w(TAG, "$name download failed: ${PiiScrubber.scrub(outcome.error.message ?: "")}")
                 staged.delete()
                 return FetchResult.Error(outcome.error.message ?: "download failed")

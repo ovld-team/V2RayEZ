@@ -4,7 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.v2rayez.app.R
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.core.AddonPackId
 import com.v2rayez.app.data.core.AddonPackManager
 import com.v2rayez.app.data.core.CoreBinaryManager
@@ -46,14 +46,14 @@ class CoreManagerViewModel @Inject constructor(
     private val vpn: VpnController,
     private val logs: LogRepository,
     private val packInstalls: PackInstallCoordinator,
-    private val remoteTelemetry: RemoteTelemetry,
+    private val firebaseTelemetry: FirebaseTelemetry,
     @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
     private fun str(resId: Int, vararg args: Any): String = appContext.getString(resId, *args)
     private fun logCore(level: LogLevel, message: String) {
         logs.logCore(level, message)
-        remoteTelemetry.addLogBreadcrumb("core_manager", level, message)
+        firebaseTelemetry.addLogBreadcrumb("core_manager", level, message)
     }
 
     private fun downloadFailHint(): String =

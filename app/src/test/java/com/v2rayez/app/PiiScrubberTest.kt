@@ -8,11 +8,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [PiiScrubber] is the only thing standing between a server host/URI/bridge/subscription body
- * and the Sentry PRIMARY telemetry stream (see `RemoteTelemetry.kt`, `beforeSend`/`beforeBreadcrumb`
- * hooks). These tests pin down exactly what must never survive a scrub.
+ * [PiiScrubber] is the remote telemetry privacy boundary. These tests pin down exactly what
+ * must never survive a scrub before data reaches Firebase Crashlytics, Performance, or Analytics.
  */
-class SentryPrivacyTest {
+class PiiScrubberTest {
 
     @Test
     fun stripsBareHostname() {
@@ -83,6 +82,21 @@ class SentryPrivacyTest {
         val scrubbed = PiiScrubber.scrub("subscription body: $blob")
         assertFalse(scrubbed.contains(blob))
         assertTrue(scrubbed.contains("[b64]"))
+    }
+
+    @Test
+    fun stripsBareUuids() {
+        val id = "11111111-2222-4333-8444-555555555555"
+        val scrubbed = PiiScrubber.scrub("free test timeout for server $id")
+        assertFalse(scrubbed.contains(id))
+        assertTrue(scrubbed.contains("[uuid]"))
+    }
+
+    @Test
+    fun stripsEmails() {
+        val scrubbed = PiiScrubber.scrub("contact alice@gmail.com about failure")
+        assertFalse(scrubbed.contains("alice@gmail.com"))
+        assertTrue(scrubbed.contains("[email]"))
     }
 
     @Test

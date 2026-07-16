@@ -1,7 +1,5 @@
 import java.util.Properties
 
-import io.sentry.android.gradle.instrumentation.logcat.LogcatLevel
-
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -9,35 +7,16 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
-    // Firebase light: Crashlytics + Analytics only (see google-services.json in this module).
+    // Firebase DevOps telemetry (see google-services.json in this module).
     alias(libs.plugins.google.services)
     alias(libs.plugins.firebase.crashlytics.plugin)
-    // Logcat → Sentry Logs/breadcrumbs; keep auto-init OFF in the manifest (manual DSN init).
-    alias(libs.plugins.sentry.android.gradle)
+    alias(libs.plugins.firebase.perf.plugin)
 }
 
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-
-val localProps = Properties().apply {
-    val f = rootProject.file("local.properties")
-    if (f.exists()) f.inputStream().use { load(it) }
-}
-
-/**
- * Sentry DSN: never hardcoded in committed source. Local dev reads `sentry.dsn` from the
- * gitignored `local.properties`; CI may pass `-Psentry.dsn=...` or the `SENTRY_DSN`
- * environment variable. Defaults to empty — [com.v2rayez.app.data.analytics.RemoteTelemetry]
- * surfaces that state to the bug-report UI instead of reporting a false success.
- */
-val sentryDsn: String = (project.findProperty("sentry.dsn") as String?)
-    ?.takeIf { it.isNotBlank() }
-    ?: System.getenv("SENTRY_DSN")?.takeIf { it.isNotBlank() }
-    ?: localProps.getProperty("sentry.dsn")?.takeIf { it.isNotBlank() }
-    ?: ""
-val sentryDsnBuildConfig = sentryDsn.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.v2rayez.app"
@@ -47,8 +26,8 @@ android {
         applicationId = "com.v2rayez.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100
-        versionName = "1.0.0"
+        versionCode = 101
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -66,10 +45,8 @@ android {
         buildConfigField(
             "String",
             "ADDONS_RELEASE_TAG",
-            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v1.0.0")}\""
+            "\"${linkProp("v2rayez.addons.releaseTag", "V2RayEZ-v1.0.1")}\""
         )
-        buildConfigField("String", "SENTRY_DSN", "\"$sentryDsnBuildConfig\"")
-
         // Ship English + Persian + Russian; strip every other locale (incl. library ones).
         resourceConfigurations += listOf("en", "fa", "ru")
 
@@ -117,9 +94,19 @@ android {
             } else {
                 null
             }
+            // No OkHttp HTTP auto-metrics: subscription/token URLs would bypass PiiScrubber.
+            // Custom FirebaseTelemetry traces (vpn_connect, geo_download, …) still work.
+            configure<com.google.firebase.perf.plugin.FirebasePerfExtension> {
+                setInstrumentationEnabled(false)
+            }
         }
         debug {
             isMinifyEnabled = false
+            // Same as release, plus: OkHttp rewrite crashes JVM unit tests on enqueue failure
+            // (InstrumentOkHttpEnqueueCallback → SessionManager NPE).
+            configure<com.google.firebase.perf.plugin.FirebasePerfExtension> {
+                setInstrumentationEnabled(false)
+            }
         }
     }
     compileOptions {
@@ -184,38 +171,6 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
-/*
- * Sentry Android Gradle plugin: Logcat instrumentation → breadcrumbs + Sentry Logs (when
- * options.logs.enabled). Disable auto-upload (no SENTRY_AUTH_TOKEN in CI for mappings).
- * Keep autoInstallation so SDK version stays aligned, but NDK stays excluded below.
- */
-sentry {
-    includeProguardMapping.set(false)
-    autoUploadProguardMapping.set(false)
-    uploadNativeSymbols.set(false)
-    includeSourceContext.set(false)
-    includeDependenciesReport.set(false)
-    telemetry.set(false)
-    autoInstallation {
-        enabled.set(true)
-        sentryVersion.set(libs.versions.sentry.get())
-    }
-    tracingInstrumentation {
-        enabled.set(true)
-        // Performance spans stay off via tracesSampleRate=0; keep Logcat for Logs/breadcrumbs.
-        features.set(emptySet())
-        logcat {
-            enabled.set(true)
-            minLevel.set(LogcatLevel.WARNING)
-        }
-    }
-}
-
-// Ensure no resolution path can pull sentry-android-ndk (plugin auto-install, BOM, etc.).
-configurations.configureEach {
-    exclude(group = "io.sentry", module = "sentry-android-ndk")
-}
-
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -276,17 +231,11 @@ dependencies {
     implementation(libs.bouncycastle.bcpkix)
     implementation(libs.bouncycastle.bcprov)
 
-    // Firebase light: Crashlytics + Analytics ONLY. No Auth/Firestore/Messaging/Remote Config/etc.
+    // Firebase DevOps telemetry: Crashlytics + Analytics + Performance.
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.analytics)
     implementation(libs.firebase.crashlytics)
-
-    // Sentry without NDK preload — SentryNdkPreloadProvider has crashed cold-start on
-    // older Android (API 26) when libsentry.so fails to load. Pure-Java SDK is enough.
-    // The Gradle plugin may pull integrations; configurations.all also excludes NDK.
-    implementation(libs.sentry.android) {
-        exclude(group = "io.sentry", module = "sentry-android-ndk")
-    }
+    implementation(libs.firebase.perf)
 
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)

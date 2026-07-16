@@ -1346,13 +1346,9 @@ private fun filterLogs(logs: List<LogEntry>, query: String, levelFilter: LogLeve
     }
 
 private fun com.v2rayez.app.data.analytics.BugReportResult.statusToken(): String = when (this) {
-    is com.v2rayez.app.data.analytics.BugReportResult.Completed -> {
-        val sentryToken = when (sentry) {
-            is com.v2rayez.app.data.analytics.SentryBugReportStatus.Sent -> "sentry_ok"
-            com.v2rayez.app.data.analytics.SentryBugReportStatus.DsnMissing -> "sentry_dsn_missing"
-            is com.v2rayez.app.data.analytics.SentryBugReportStatus.Failed -> "sentry_failed"
-        }
-        "$sentryToken:${if (firebaseSent) "firebase_ok" else "firebase_failed"}"
+    is com.v2rayez.app.data.analytics.BugReportResult.Completed -> when (firebase) {
+        com.v2rayez.app.data.analytics.BugReportStatus.Sent -> "firebase_ok"
+        is com.v2rayez.app.data.analytics.BugReportStatus.Failed -> "firebase_failed"
     }
     is com.v2rayez.app.data.analytics.BugReportResult.Failed -> "report_failed"
 }
@@ -1729,13 +1725,14 @@ class OnboardingViewModel @Inject constructor(
 
     fun completeOnboarding() = viewModelScope.launch {
         val current = repo.current()
-        val wants = current.onboardingWants.copy(analytics = current.analyticsConsent)
+        val wants = current.onboardingWants.copy(analytics = true)
         val applied = com.v2rayez.app.data.core.OnboardingFeatureMapping.apply(current, wants)
         repo.update {
             applied.copy(
                 termsAccepted = true,
                 onboardingComplete = true,
-                crashlyticsConsent = true
+                crashlyticsConsent = true,
+                analyticsConsent = true
             )
         }
         // PackInstallCoordinator.start() / Application observes pendingAddonInstall and drains.

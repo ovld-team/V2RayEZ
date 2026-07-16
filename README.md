@@ -32,12 +32,18 @@
 2. Download `V2RayEZ-v*-release.apk` and install it (unknown sources allowed).
 3. Optional: in the app open **Core manager** and install addon zips from the same Release.
 
-Current release: [`V2RayEZ-v1.0.0`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.0).
+Current release: [`V2RayEZ-v1.0.1`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.1).
 
 ### Addon packs
 
 Release assets look like `tor-arm64-v8a.zip`, `lyrebird-arm64-v8a.zip`, `psiphon-arm64-v8a.zip`, `dnstunnel-arm64-v8a.zip`, …  
-The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v1.0.0` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Local dev uses `gradle.properties`; CI release builds pass the publish tag automatically. Checksums are in `SHA256SUMS.txt`.
+The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v1.0.1` (overridable with Gradle properties `v2rayez.addons.githubRepo` / `v2rayez.addons.releaseTag`). Local dev uses `gradle.properties`; CI release builds pass the publish tag automatically. Checksums are in `SHA256SUMS.txt`.
+
+### Release notes — v1.0.1
+
+- **Firebase-only DevOps telemetry:** Removed Sentry and made Firebase Crashlytics, Performance Monitoring, and Analytics the always-on telemetry surface.
+- **Operational coverage:** Added scrubbed failure reporting, custom traces for VPN/Tor/MITM/download/latency/bug-report paths, screen views, VPN state, and feature-toggle events.
+- **Privacy:** Preserved PII scrubbing for hosts, URIs, bridges, IPs, PEMs, fingerprints, and subscription bodies before telemetry upload.
 
 ### Release notes — v1.0.0
 
@@ -50,7 +56,6 @@ The app resolves them from `ovld-team/V2RayEZ` at tag `V2RayEZ-v1.0.0` (overrida
 
 ```bash
 cp app/google-services.json.example app/google-services.json   # then fill Firebase config
-# Put sentry.dsn=… in local.properties (gitignored)
 ./gradlew assembleDebug
 ./gradlew testDebugUnitTest
 ```
@@ -59,10 +64,9 @@ Release signing needs a local `keystore.properties` pointing at your keystore. N
 
 ### Privacy
 
-- **Sentry** is the primary crash / error channel; **Firebase Crashlytics** is a fatal backup.
-- Hosts, URIs, bridges, IPs, and certificates are scrubbed before upload.
-- Firebase Analytics is opt-in. Session Replay is off.
-- DSN and `google-services.json` are supplied at build time (local file or CI secrets), not stored in source.
+- Firebase Crashlytics, Performance Monitoring, and Analytics are the always-on DevOps telemetry channels.
+- Hosts, URIs, bridges, IPs, certificates, fingerprints, and subscription bodies are scrubbed before upload.
+- Real Firebase config comes from local `app/google-services.json` or the CI `GOOGLE_SERVICES_JSON` secret, not source.
 
 ### License
 
@@ -79,13 +83,12 @@ Release signing needs a local `keystore.properties` pointing at your keystore. N
 1. از صفحه [Releases](https://github.com/ovld-team/V2RayEZ/releases) فایل `V2RayEZ-v*-release.apk` را بگیرید و نصب کنید.
 2. برای بسته‌های افزونه، در اپ به **مدیر هسته** بروید یا زیپ‌های همان Release را نصب کنید.
 
-نسخه فعلی: [`V2RayEZ-v1.0.0`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.0).
+نسخه فعلی: [`V2RayEZ-v1.0.1`](https://github.com/ovld-team/V2RayEZ/releases/tag/V2RayEZ-v1.0.1).
 
 ### ساخت
 
 ```bash
 cp app/google-services.json.example app/google-services.json
-# sentry.dsn را در local.properties بگذارید
 ./gradlew assembleDebug
 ```
 
@@ -93,7 +96,7 @@ cp app/google-services.json.example app/google-services.json
 
 ### حریم خصوصی
 
-گزارش خطا با Sentry و پشتیبان Crashlytics است؛ آدرس‌ها و اطلاعات حساس پاکسازی می‌شوند. Analytics اختیاری است.
+Firebase Crashlytics، Performance Monitoring و Analytics همیشه برای دید عملیاتی فعال هستند؛ آدرس‌ها و اطلاعات حساس پیش از ارسال پاک‌سازی می‌شوند.
 
 ### مجوز
 

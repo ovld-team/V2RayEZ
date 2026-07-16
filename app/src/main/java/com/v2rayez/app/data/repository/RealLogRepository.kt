@@ -43,7 +43,7 @@ class RealLogRepository @Inject constructor(
      * Exported files leave the device via [android.content.Intent.ACTION_SEND] /
      * [androidx.core.content.FileProvider] share, unlike the in-app Logs screen (on-device
      * only) — scrub hosts/URIs/bridges/IPs/keys with [PiiScrubber] here so a shared log can't
-     * carry server identity or secrets off the device (14-P0, `.agents/skills/sentry-android`).
+     * carry server identity or secrets off the device.
      */
     override suspend fun exportToFile(): File? = withContext(Dispatchers.IO) {
         runCatching {

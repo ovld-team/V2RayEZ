@@ -3,7 +3,7 @@ package com.v2rayez.app.data.tor
 import android.content.Context
 import android.util.Log
 import com.v2rayez.app.data.analytics.FailureCategory
-import com.v2rayez.app.data.analytics.RemoteTelemetry
+import com.v2rayez.app.data.analytics.FirebaseTelemetry
 import com.v2rayez.app.data.core.AddonPackManager
 import com.v2rayez.app.data.repository.logTor
 import com.v2rayez.app.domain.model.LogLevel
@@ -63,7 +63,7 @@ class TorController @Inject constructor(
     @ApplicationContext private val context: Context,
     private val bridgeProvider: BridgeProvider,
     private val addonPacks: AddonPackManager,
-    private val remoteTelemetry: RemoteTelemetry,
+    private val firebaseTelemetry: FirebaseTelemetry,
     private val logRepository: LogRepository,
     nativeC: NativeCTorEngine
 ) {
@@ -77,7 +77,7 @@ class TorController @Inject constructor(
 
     private fun setError(message: String, engine: TorEngineType, bootstrapPercent: Int = 0) {
         _status.value = TorStatus(TorState.ERROR, bootstrapPercent, message, engine)
-        runCatching { remoteTelemetry.captureVpnFailure(FailureCategory.TOR, message) }
+        runCatching { firebaseTelemetry.captureVpnFailure(FailureCategory.TOR, message) }
         runCatching { logRepository.logTor(LogLevel.ERROR, message) }
         Log.e(TAG, message)
     }
@@ -96,7 +96,7 @@ class TorController @Inject constructor(
         if (milestone <= lastBootstrapBreadcrumb) return
         lastBootstrapBreadcrumb = milestone
         runCatching {
-            remoteTelemetry.addBreadcrumb("tor", "bootstrap $milestone%")
+            firebaseTelemetry.addBreadcrumb("tor", "bootstrap $milestone%")
         }
         runCatching {
             logRepository.logTor(LogLevel.INFO, "Tor bootstrap $milestone%")
@@ -148,6 +148,11 @@ class TorController @Inject constructor(
 
     /** Start Tor per [config], resolving bridges and retrying with fresh ones on failure. */
     suspend fun start(config: TorConfig, readyTimeoutMs: Long = 75_000L) = startMutex.withLock {
+        val trace = firebaseTelemetry.startTrace(
+            "tor_bootstrap",
+            mapOf("engine" to config.engine.name, "transport" to config.transport.name)
+        )
+        try {
         // Reuse a healthy CONNECTED daemon for the same transport/engine/socks endpoints.
         val cur = lastConfig
         if (_status.value.state == TorState.CONNECTED &&
@@ -221,6 +226,7 @@ class TorController @Inject constructor(
         }
 
         if (!ready) {
+            trace.putAttribute("result", "failed")
             // Critical: leave no orphan Tor/PT processes after bootstrap timeout.
             runCatching { engine.stop() }
             if (active === engine) active = null
@@ -232,8 +238,12 @@ class TorController @Inject constructor(
                 )
             }
         } else {
+            trace.putAttribute("result", "success")
             // Post-connect watchdog: guard against a Tor/PT process that dies after bootstrap.
             startWatchdog(config)
+        }
+        } finally {
+            trace.stop()
         }
     }
 
